@@ -15,11 +15,11 @@ fails:
             - mutable: true
               name: p
               args: []
-              typ: Bool
+              sort: Bool
             - mutable: true
               name: q
               args: []
-              typ: Bool
+              sort: Bool
         universe: []
         interp:
           - shape:
