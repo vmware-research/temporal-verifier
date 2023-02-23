@@ -77,7 +77,7 @@ fn check_definition(_context: &Context, _definition: &Definition) -> Result<(), 
 }
 
 fn check_relation(_context: &Context, _relation: &RelationDecl) -> Result<(), SortError> {
-    todo!()
+    todo!("we don't check relations yet")
 }
 
 fn check_sort(context: &Context, sort: &Sort) -> Result<(), SortError> {
@@ -114,7 +114,7 @@ fn check_term(context: &mut Context, term: &Term) -> Result<Sort, SortError> {
                 sort_is_bool(&check_term(context, x)?)?;
                 Ok(Sort::Bool)
             },
-            UOp::Prime => todo!(),
+            UOp::Prime => check_term(context, x),
         },
         Term::BinOp(binop, x, y) => match binop {
             BinOp::Equals | BinOp::NotEquals => {

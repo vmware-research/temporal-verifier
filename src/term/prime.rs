@@ -86,13 +86,13 @@ mod tests {
     fn test_normalize() {
         assert_eq!(Next::normalize(&term("r'(x) | z")), term("r'(x) | z"));
         assert_eq!(
-            Next::normalize(&term("(r(x) | z & forall x. p(x)')'")),
+            Next::normalize(&term("(r(x) | z & forall x:t. p(x)')'")),
             // this x gets primed because it's a free variable
-            term("r'(x') | z' & forall x. p''(x)")
+            term("r'(x') | z' & forall x:t. p''(x)")
         );
         assert_eq!(
-            Next::prime(&term("r(x) | z & forall x. p(x)'")),
-            term("r'(x') | z' & forall x. p''(x)")
+            Next::prime(&term("r(x) | z & forall x:t. p(x)'")),
+            term("r'(x') | z' & forall x:t. p''(x)")
         );
     }
 }

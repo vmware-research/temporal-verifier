@@ -104,15 +104,15 @@ mod tests {
     #[test]
     fn test_fo() {
         assert_eq!(
-            FirstOrder::unrolling(&term("p & exists x. r(x) & p -> z(x)")),
+            FirstOrder::unrolling(&term("p & exists x:t. r(x) & p -> z(x)")),
             Some(0),
         );
         assert_eq!(
-            FirstOrder::unrolling(&term("p | q & forall x. r'(x)")),
+            FirstOrder::unrolling(&term("p | q & forall x:t. r'(x)")),
             Some(1),
         );
         assert_eq!(
-            FirstOrder::unrolling(&term("p' | q & (forall x. r'(x))'")),
+            FirstOrder::unrolling(&term("p' | q & (forall x:t. r'(x))'")),
             Some(2),
         );
     }
@@ -124,7 +124,7 @@ mod tests {
             None
         );
         assert_eq!(
-            FirstOrder::unrolling(&term("a | b & exists x. always p(x)")),
+            FirstOrder::unrolling(&term("a | b & exists x:t. always p(x)")),
             None
         );
     }
