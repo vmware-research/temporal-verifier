@@ -5,5 +5,6 @@ mod defs;
 pub mod parser;
 pub mod printer;
 pub mod semantics;
+pub mod sorts;
 pub mod syntax;
 pub use parser::parse;

@@ -6,7 +6,7 @@ use std::{fs, path::PathBuf, process};
 
 use crate::solver::solver_path;
 use crate::{
-    fly::{self, parser::parse_error_diagonistic, printer},
+    fly::{self, parser::parse_error_diagonistic, printer, sorts},
     inference::run_fixpoint,
     solver::backends::{self, GenericBackend},
     verify::{verify_module, SolverConf},
@@ -191,6 +191,11 @@ impl App {
                 println!("{}", printer::fmt(&m));
             }
             Command::Verify(ref args @ VerifyArgs { houdini, .. }) => {
+                let r = sorts::check(&m);
+                if let Err(err) = r {
+                    panic!("{:?}", err);
+                }
+                
                 let conf = args.get_solver_conf();
                 let r = verify_module(&conf, &m, houdini);
                 match r {
