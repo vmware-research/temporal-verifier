@@ -270,12 +270,7 @@ impl Model {
                 body,
             } => {
                 assert!(!binders.is_empty());
-                let shape: Vec<usize> = binders
-                    .iter()
-                    .map(|b| {
-                        self.cardinality(&b.sort)
-                    })
-                    .collect();
+                let shape: Vec<usize> = binders.iter().map(|b| self.cardinality(&b.sort)).collect();
                 let names: Vec<&String> = binders.iter().map(|b| &b.name).collect();
                 let mut assignment_ = assignment.cloned().unwrap_or_default();
                 let mut iter = shape
