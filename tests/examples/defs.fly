@@ -15,7 +15,7 @@ def pq(t: thread) -> bool {
 }
 
 def next() -> bool {
-  (exists t. pq(t)) & pq(t)' = pq(t) | t = t0
+  (exists t:thread. pq(t)) & pq(t)' = pq(t) | t = t0
 }
 
 assume init

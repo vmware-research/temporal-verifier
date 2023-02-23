@@ -9,7 +9,7 @@ mutable q(thread): bool
 immutable t0: thread
 
 assume init
-assume (exists t. p(t) & q(t)) & (p(t) & q(t))' = (p(t) & q(t)) | t = t0
+assume (exists t:thread. p(t) & q(t)) & (p(t) & q(t))' = (p(t) & q(t)) | t = t0
 assume !q
 assert p(t0)
 proof {
