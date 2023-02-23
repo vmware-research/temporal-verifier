@@ -25,10 +25,10 @@ pub enum SortError {
 
     #[error("higher order functions aren't supported")]
     HigherOrder(Term),
-    #[error("relation expected arguments but didn't get them")]
+    #[error("function expected arguments but didn't get them")]
     Uncalled(String),
     #[error("tried to call something that didn't take any args")]
-    NotAFunction(String),
+    Uncallable(String),
 }
 
 fn sort_assert_eq(a: &Sort, b: &Sort) -> Result<(), SortError> {
@@ -163,32 +163,28 @@ fn check_term(context: &Context, term: &Term) -> Result<Sort, SortError> {
                     }
                     Ok(ret.clone())
                 }
-                Some(AbstractSort::Unit(_)) => Err(SortError::NotAFunction(name.clone())),
+                Some(AbstractSort::Unit(_)) => Err(SortError::Uncallable(name.clone())),
                 None => Err(SortError::UnknownName(name.clone())),
             },
             f => Err(SortError::HigherOrder(f.clone())),
         },
-        Term::UnaryOp(uop, x) => match uop {
-            UOp::Not | UOp::Always | UOp::Eventually => {
-                sort_assert_eq(&Sort::Bool, &check_term(context, x)?)?;
-                Ok(Sort::Bool)
-            }
-            UOp::Prime => check_term(context, x),
-        },
-        Term::BinOp(binop, x, y) => match binop {
-            BinOp::Equals | BinOp::NotEquals => {
-                let a = check_term(context, x)?;
-                let b = check_term(context, y)?;
-                sort_assert_eq(&a, &b)?;
-                Ok(Sort::Bool)
-            }
-            BinOp::Implies | BinOp::Iff => {
-                sort_assert_eq(&Sort::Bool, &check_term(context, x)?)?;
-                sort_assert_eq(&Sort::Bool, &check_term(context, y)?)?;
-                Ok(Sort::Bool)
-            }
-        },
-        Term::NAryOp(_nop, xs) => {
+        Term::UnaryOp(UOp::Not | UOp::Always | UOp::Eventually, x) => {
+            sort_assert_eq(&Sort::Bool, &check_term(context, x)?)?;
+            Ok(Sort::Bool)
+        }
+        Term::UnaryOp(UOp::Prime, x) => check_term(context, x),
+        Term::BinOp(BinOp::Equals | BinOp::NotEquals, x, y) => {
+            let a = check_term(context, x)?;
+            let b = check_term(context, y)?;
+            sort_assert_eq(&a, &b)?;
+            Ok(Sort::Bool)
+        }
+        Term::BinOp(BinOp::Implies | BinOp::Iff, x, y) => {
+            sort_assert_eq(&Sort::Bool, &check_term(context, x)?)?;
+            sort_assert_eq(&Sort::Bool, &check_term(context, y)?)?;
+            Ok(Sort::Bool)
+        }
+        Term::NAryOp(NOp::And | NOp::Or, xs) => {
             for x in xs {
                 sort_assert_eq(&Sort::Bool, &check_term(context, x)?)?;
             }
@@ -202,7 +198,7 @@ fn check_term(context: &Context, term: &Term) -> Result<Sort, SortError> {
             Ok(a)
         }
         Term::Quantified {
-            quantifier: _,
+            quantifier: Quantifier::Forall | Quantifier::Exists,
             binders,
             body,
         } => {
