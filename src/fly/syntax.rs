@@ -37,9 +37,7 @@ pub enum Quantifier {
 #[derive(PartialEq, Eq, Clone, Debug, Hash)]
 pub struct Binder {
     pub name: String,
-    // ODED: I would rename typ to sort, here and elsewhere
-    // ODED: not sure if we should have Option here until we have type inference
-    pub typ: Option<Sort>,
+    pub sort: Sort,
 }
 
 // ODED: maybe Term should be Copy? (see test_eval in semantics.rs)
@@ -190,7 +188,7 @@ pub struct RelationDecl {
     pub mutable: bool,
     pub name: String,
     pub args: Vec<Sort>,
-    pub typ: Sort,
+    pub sort: Sort,
 }
 
 #[derive(PartialEq, Eq, Clone, Debug, Serialize)]
@@ -256,7 +254,7 @@ impl Signature {
         // Generate constants.
         for rel_decl in &self.relations {
             if rel_decl.args.is_empty() {
-                new_terms[sort_idx(&rel_decl.typ)].push(Term::Id(rel_decl.name.clone()));
+                new_terms[sort_idx(&rel_decl.sort)].push(Term::Id(rel_decl.name.clone()));
             }
         }
 
@@ -298,7 +296,7 @@ impl Signature {
                             .multi_cartesian_product()
                         {
                             let term_vec = args.iter().map(|&x| x.clone()).collect();
-                            new_new_terms[sort_idx(&rel_decl.typ)].push(Term::App(
+                            new_new_terms[sort_idx(&rel_decl.sort)].push(Term::App(
                                 Box::new(Term::Id(rel_decl.name.clone())),
                                 term_vec,
                             ));
@@ -346,7 +344,7 @@ impl Signature {
 pub struct Definition {
     pub name: String,
     pub binders: Vec<Binder>,
-    pub ret_typ: Sort,
+    pub ret_sort: Sort,
     pub body: Term,
 }
 
@@ -391,40 +389,40 @@ mod tests {
 
     #[test]
     fn test_terms_by_sort() {
-        let typ = |n: usize| Sort::Id(format!("T{n}"));
+        let sort = |n: usize| Sort::Id(format!("T{n}"));
 
         let mut sig = Signature {
-            sorts: vec![typ(1), typ(2)],
+            sorts: vec![sort(1), sort(2)],
             relations: vec![
                 RelationDecl {
                     mutable: true,
                     name: "c1".to_string(),
                     args: vec![],
-                    typ: typ(1),
+                    sort: sort(1),
                 },
                 RelationDecl {
                     mutable: true,
                     name: "c2".to_string(),
                     args: vec![],
-                    typ: typ(2),
+                    sort: sort(2),
                 },
                 RelationDecl {
                     mutable: true,
                     name: "f12".to_string(),
-                    args: vec![typ(1)],
-                    typ: typ(2),
+                    args: vec![sort(1)],
+                    sort: sort(2),
                 },
                 RelationDecl {
                     mutable: true,
                     name: "f21".to_string(),
-                    args: vec![typ(2)],
-                    typ: typ(1),
+                    args: vec![sort(2)],
+                    sort: sort(1),
                 },
                 RelationDecl {
                     mutable: true,
                     name: "r".to_string(),
-                    args: vec![typ(2), typ(1)],
-                    typ: Sort::Bool,
+                    args: vec![sort(2), sort(1)],
+                    sort: Sort::Bool,
                 },
             ],
         };
@@ -510,31 +508,31 @@ mod tests {
         );
 
         sig = Signature {
-            sorts: vec![typ(1), typ(2)],
+            sorts: vec![sort(1), sort(2)],
             relations: vec![
                 RelationDecl {
                     mutable: true,
                     name: "c1".to_string(),
                     args: vec![],
-                    typ: typ(1),
+                    sort: sort(1),
                 },
                 RelationDecl {
                     mutable: true,
                     name: "c2".to_string(),
                     args: vec![],
-                    typ: typ(2),
+                    sort: sort(2),
                 },
                 RelationDecl {
                     mutable: true,
                     name: "f12".to_string(),
-                    args: vec![typ(1)],
-                    typ: typ(2),
+                    args: vec![sort(1)],
+                    sort: sort(2),
                 },
                 RelationDecl {
                     mutable: true,
                     name: "r".to_string(),
-                    args: vec![typ(2), typ(1)],
-                    typ: Sort::Bool,
+                    args: vec![sort(2), sort(1)],
+                    sort: Sort::Bool,
                 },
             ],
         };

@@ -95,7 +95,7 @@ impl<B: Backend> Solver<B> {
                     [
                         atom_s(&r.name),
                         sexp_l(r.args.iter().map(sexp::sort)),
-                        sexp::sort(&r.typ),
+                        sexp::sort(&r.sort),
                     ],
                 ));
             }
@@ -109,7 +109,7 @@ impl<B: Backend> Solver<B> {
                         [
                             atom_s(format!("{name}{}", "'".repeat(n_primes))),
                             sexp_l(r.args.iter().map(sexp::sort)),
-                            sexp::sort(&r.typ),
+                            sexp::sort(&r.sort),
                         ],
                     ));
                 }
@@ -205,18 +205,18 @@ impl<B: Backend> Solver<B> {
 
         let ind = self.get_indicator(&format!("{univ}_card_{card}"));
 
-        let univ: Option<Sort> = Some(Sort::new(univ));
+        let univ: Sort = Sort::new(univ);
 
         let univ_card =
             Term::exists(
                 (0..card).map(|n| Binder {
                     name: format!("x{n}"),
-                    typ: univ.clone(),
+                    sort: univ.clone(),
                 }),
                 Term::forall(
                     [Binder {
                         name: "x".to_string(),
-                        typ: univ.clone(),
+                        sort: univ.clone(),
                     }],
                     Term::or((0..card).map(|n| {
                         Term::equals(Term::Id("x".to_string()), Term::Id(format!("x{n}")))

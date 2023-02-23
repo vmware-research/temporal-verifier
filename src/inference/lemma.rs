@@ -136,7 +136,7 @@ impl<T: LemmaQF> Lemma<T> {
                     .iter()
                     .map(|n| Binder {
                         name: n.clone(),
-                        typ: Some(self.sorts[i].clone()),
+                        sort: self.sorts[i].clone(),
                     })
                     .collect(),
                 body: Box::new(term),
@@ -305,11 +305,11 @@ mod tests {
 
     #[test]
     fn test_weaken() {
-        let typ = |n: usize| Sort::Id(format!("T{n}"));
+        let sort = |n: usize| Sort::Id(format!("T{n}"));
 
         let cfg: QuantifierConfig = QuantifierConfig {
             quantifiers: vec![None, None],
-            sorts: vec![typ(1), typ(3)],
+            sorts: vec![sort(1), sort(3)],
             names: vec![
                 vec!["x11".to_string()],
                 vec!["x31".to_string(), "x32".to_string()],

@@ -12,10 +12,7 @@ pub fn sort(s: &Sort) -> Sexp {
 }
 
 fn binder(b: &Binder) -> Sexp {
-    match &b.typ {
-        None => panic!("unexpected binder without sort"),
-        Some(t) => app(&b.name, vec![sort(t)]),
-    }
+    app(&b.name, vec![sort(&b.sort)])
 }
 
 fn term_primes(t: &Term, num_primes: usize) -> Sexp {

@@ -28,8 +28,8 @@ grammar parser() for str {
     rule __ = word_boundary() _
 
     rule binder() -> Binder
-    =  "(" name:ident() _ ":" _ typ:sort() ")" { Binder {name, typ: Some(typ) } } /
-       name:ident() typ:(_ ":" _ s:sort() { s })? { Binder { name, typ } }
+    =  "(" name:ident() _ ":" _ sort:sort() ")" { Binder {name, sort } } /
+       name:ident() sort:(_ ":" _ s:sort() { s }) { Binder { name, sort } }
 
     pub(super) rule term() -> Term = precedence!{
         q:("forall" { Forall } / "exists" { Exists }) __
@@ -100,7 +100,7 @@ grammar parser() for str {
       mutable: m,
       name: r,
       args,
-      typ: s,
+      sort: s,
     } }
 
     pub(super) rule signature() -> Signature
@@ -112,15 +112,15 @@ grammar parser() for str {
      } }
 
      rule def_binder() -> Binder
-     = name:ident() _ ":" _ typ:sort() { Binder { name, typ: Some(typ) } }
+     = name:ident() _ ":" _ sort:sort() { Binder { name, sort } }
 
      rule def_binders() -> Vec<Binder>
      = "(" _ args:(def_binder() ** (_ "," _)) _ ")" { args }
 
      rule def() -> Definition
-     = "def" __ name:ident() _ binders:def_binders() _ "->" _ ret_typ:sort() _
+     = "def" __ name:ident() _ binders:def_binders() _ "->" _ ret_sort:sort() _
        "{" _ body:term() _ "}"
-     { Definition { name, binders, ret_typ, body } }
+     { Definition { name, binders, ret_sort, body } }
 
      rule defs() -> Vec<Definition>
      = newline_separated(<def()>)

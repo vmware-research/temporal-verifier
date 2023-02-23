@@ -8,22 +8,33 @@ use thiserror::Error;
 pub enum SortError {
 	#[error("module signature should not contain bool")]
 	UninterpretedBool,
+	#[error("this sort was not declared")]
+	UnknownSort(String),
+	#[error("this binder was unknown")]
+	UnknownName(String),
     #[error("expected one type but found another")]
     NotEqual(Sort, Sort),
 }
 
+fn sort_is_bool(sort: &Sort) -> Result<(), SortError> {
+	match sort {
+		Sort::Bool => Ok(()),
+		Sort::Id(_) => Err(SortError::NotEqual(sort.clone(), Sort::Bool))
+	}
+}
 
 pub fn check(module: &Module) -> Result<(), SortError> {
-	for sort in &module.signature.sorts {
-		if let Sort::Bool = sort {
-			return Err(SortError::UninterpretedBool)
-		}
-	}
-
-	let context = Context {
-		sorts: module.signature.sorts.clone(),
+	let mut context = Context {
+		sorts: vec![],
 		names: im::HashMap::new(),
 	};
+
+	for sort in &module.signature.sorts {
+		match sort {
+			Sort::Bool => Err(SortError::UninterpretedBool)?,
+			Sort::Id(s) => context.sorts.push(s.to_owned()),
+		}
+	}
 
 	for relation in &module.signature.relations {
 		check_relation(&context, relation)?;
@@ -41,37 +52,51 @@ pub fn check(module: &Module) -> Result<(), SortError> {
 }
 
 struct Context {
-	sorts: Vec<Sort>,
+	sorts: Vec<String>,
 	names: im::HashMap<String, Sort>,
 }
 
 fn check_statement(context: &Context, statement: &ThmStmt) -> Result<(), SortError> {
 	match statement {
-		ThmStmt::Assume(term) => {
-			let sort = check_term(context, term)?;
-			if sort != Sort::Bool {
-				return Err(SortError::NotEqual(sort, Sort::Bool))
-			}
-			Ok(())
-		},
+		ThmStmt::Assume(term) => sort_is_bool(&check_term(context, term)?),
 		ThmStmt::Assert(proof) => check_proof(context, proof),
 	}
 }
 
-fn check_proof(_context: &Context, _proof: &Proof) -> Result<(), SortError> {
-	todo!()
+fn check_proof(context: &Context, proof: &Proof) -> Result<(), SortError> {
+	for invariant in &proof.invariants {
+		sort_is_bool(&check_term(context, &invariant.x)?)?;
+	}
+	sort_is_bool(&check_term(context, &proof.assert.x)?)
 }
 
 fn check_definition(_context: &Context, _definition: &Definition) -> Result<(), SortError> {
-	todo!()
+	todo!("we don't check definitions yet")
 }
 
 fn check_relation(_context: &Context, _relation: &RelationDecl) -> Result<(), SortError> {
 	todo!()
 }
 
-fn check_sort(_context: &Context, _sort: &Sort) -> Result<(), SortError> {
-	todo!()
+fn check_sort(context: &Context, sort: &Sort) -> Result<(), SortError> {
+	match sort {
+		Sort::Bool => Ok(()),
+		Sort::Id(a) => match context.sorts.iter().find(|b| a == *b) {
+			Some(_) => Ok(()),
+			None => Err(SortError::UnknownSort(a.clone()))
+		}
+	}
+}
+
+fn check_binder(context: &Context, binder: &Binder) -> Result<(), SortError> {
+	check_sort(context, &binder.sort)?;
+	match context.names.get(&binder.name) {
+		Some(sort) => match *sort == binder.sort {
+			true => Ok(()),
+			false => Err(SortError::NotEqual(sort.clone(), binder.sort.clone())),
+		},
+		None => Err(SortError::UnknownName(binder.name.clone())),
+	}
 }
 
 fn check_term(_context: &Context, _term: &Term) -> Result<Sort, SortError> {
