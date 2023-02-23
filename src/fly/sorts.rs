@@ -3,6 +3,7 @@
 
 use crate::fly::syntax::*;
 use thiserror::Error;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Error, Debug)]
 pub enum SortError {
@@ -10,10 +11,20 @@ pub enum SortError {
     UninterpretedBool,
     #[error("this sort was not declared")]
     UnknownSort(String),
+    #[error("this sort was defined multiple times")]
+    RedefinedSort(String),
+    #[error("this relation was not declared")]
+    UnknownRelation(String),
+    #[error("this relation was defined multiple times")]
+    RedefinedRelation(String),
     #[error("this binder was unknown")]
     UnknownName(String),
     #[error("expected one type but found another")]
     NotEqual(Sort, Sort),
+    #[error("higher order functions aren't supported")]
+    HigherOrder(Term),
+    #[error("relation expected arguments but didn't get them")]
+    UncalledRelation(String),
 }
 
 fn sort_is_bool(sort: &Sort) -> Result<(), SortError> {
@@ -24,22 +35,36 @@ fn sort_is_bool(sort: &Sort) -> Result<(), SortError> {
 }
 
 pub fn check(module: &Module) -> Result<(), SortError> {
-    let mut sorts = vec![];
+    let mut sorts = HashSet::new();
     for sort in &module.signature.sorts {
         match sort {
             Sort::Bool => Err(SortError::UninterpretedBool)?,
-            Sort::Id(s) => sorts.push(s.to_owned()),
+            Sort::Id(s) => {
+                if !sorts.insert(s.clone()) {
+                    Err(SortError::RedefinedSort(s.clone()))?
+                }
+            }
         }
     }
 
     let mut context = Context {
         sorts: &sorts,
+        relations: &HashMap::new(),
         names: im::HashMap::new(),
     };
 
-    for relation in &module.signature.relations {
-        check_relation(&context, relation)?;
+    let mut relations = HashMap::new();
+    for rel in &module.signature.relations {
+        for arg in &rel.args {
+            check_sort(&context, arg)?;
+        }
+        check_sort(&context, &rel.sort)?;
+        if relations.insert(rel.name.clone(), (rel.args.clone(), rel.sort.clone())).is_some() {
+            Err(SortError::RedefinedRelation(rel.name.clone()))?
+        }
     }
+
+    context.relations = &relations;
 
     for definition in &module.defs {
         check_definition(&context, definition)?;
@@ -54,7 +79,8 @@ pub fn check(module: &Module) -> Result<(), SortError> {
 
 #[derive(Clone, Debug)]
 struct Context<'a> {
-    sorts: &'a [String],
+    sorts: &'a HashSet<String>,
+    relations: &'a HashMap<String, (Vec<Sort>, Sort)>,
     names: im::HashMap<String, Sort>,
 }
 
@@ -74,10 +100,6 @@ fn check_proof(context: &mut Context, proof: &Proof) -> Result<(), SortError> {
 
 fn check_definition(_context: &Context, _definition: &Definition) -> Result<(), SortError> {
     todo!("we don't check definitions yet")
-}
-
-fn check_relation(_context: &Context, _relation: &RelationDecl) -> Result<(), SortError> {
-    todo!("we don't check relations yet")
 }
 
 fn check_sort(context: &Context, sort: &Sort) -> Result<(), SortError> {
@@ -106,9 +128,32 @@ fn check_term(context: &mut Context, term: &Term) -> Result<Sort, SortError> {
         Term::Literal(_) => Ok(Sort::Bool),
         Term::Id(id) => match context.names.get(id) {
             Some(sort) => Ok(sort.clone()),
-            None => Err(SortError::UnknownName(id.clone())),
+            None => match context.relations.get(id) {
+                Some((args, ret)) => {
+                    if !args.is_empty() {
+                        Err(SortError::UncalledRelation(id.clone()))
+                    } else {
+                        Ok(ret.clone())
+                    }
+                },
+                None => Err(SortError::UnknownName(id.clone())),
+            },
         },
-        Term::App(_f, _xs) => todo!(),
+        Term::App(f, xs) => match &**f {
+            Term::Id(f) => match context.relations.get(f) {
+                Some((args, ret)) => {
+                    for (x, arg) in xs.iter().zip(args) {
+                        let a = check_term(context, x)?;
+                        if a != *arg {
+                            Err(SortError::NotEqual(a, arg.clone()))?
+                        }
+                    }
+                    Ok(ret.clone())
+                },
+                None => Err(SortError::UnknownRelation(f.clone())),
+            },
+            f => Err(SortError::HigherOrder(f.clone())),
+        },
         Term::UnaryOp(uop, x) => match uop {
             UOp::Not | UOp::Always | UOp::Eventually => {
                 sort_is_bool(&check_term(context, x)?)?;
