@@ -29,7 +29,10 @@ grammar parser() for str {
 
     rule binder() -> Binder
     =  "(" name:ident() _ ":" _ sort:sort() ")" { Binder {name, sort } } /
-       name:ident() sort:(_ ":" _ s:sort() { s }) { Binder { name, sort } }
+        name:ident() sort:(_ ":" _ s:sort() { s })? { Binder {
+            name,
+            sort: sort.unwrap_or(Sort::Id("".to_owned()))
+        } }
 
     pub(super) rule term() -> Term = precedence!{
         q:("forall" { Forall } / "exists" { Exists }) __

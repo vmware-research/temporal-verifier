@@ -5,10 +5,5 @@ expression: combined_stdout_stderr
 ---
 
 ======== STDERR: ===========
-error: could not parse file
-  ┌─ tests/examples/fail/sorts/sort_inference_error.fly:6:16
-  │
-6 │ assert forall x. x = x
-  │                ^ expected ":"
-
+UnknownSort("")
 
