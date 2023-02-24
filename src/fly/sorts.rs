@@ -64,12 +64,11 @@ pub fn check(module: &Module) -> Result<(), SortError> {
             check_sort(&context, arg)?;
         }
         check_sort(&context, &rel.sort)?;
-        let f = if rel.args.is_empty() {
-            AbstractSort::Unit(rel.sort.clone())
-        } else {
-            AbstractSort::Function(rel.args.clone(), rel.sort.clone())
-        };
-        context.add_name(rel.name.clone(), f, false)?;
+        context.add_name(
+            rel.name.clone(),
+            (rel.args.clone(), rel.sort.clone()),
+            false,
+        )?;
     }
 
     for def in &module.defs {
@@ -77,25 +76,19 @@ pub fn check(module: &Module) -> Result<(), SortError> {
             let mut context = context.clone();
             for binder in &def.binders {
                 check_sort(&context, &binder.sort)?;
-                context.add_name(
-                    binder.name.clone(),
-                    AbstractSort::Unit(binder.sort.clone()),
-                    true,
-                )?;
+                context.add_name(binder.name.clone(), (vec![], binder.sort.clone()), true)?;
             }
             check_sort(&context, &def.ret_sort)?;
             let ret: Sort = check_term(&context, &def.body)?;
             sort_assert_eq(&ret, &def.ret_sort)?;
         }
 
-        let f = AbstractSort::Function(
-            def.binders
-                .iter()
-                .map(|binder| binder.sort.clone())
-                .collect(),
-            def.ret_sort.clone(),
-        );
-        context.add_name(def.name.clone(), f, false)?;
+        let args = def
+            .binders
+            .iter()
+            .map(|binder| binder.sort.clone())
+            .collect();
+        context.add_name(def.name.clone(), (args, def.ret_sort.clone()), false)?;
     }
 
     for statement in &module.statements {
@@ -113,11 +106,8 @@ pub fn check(module: &Module) -> Result<(), SortError> {
     Ok(())
 }
 
-#[derive(Clone, Debug)]
-enum AbstractSort {
-    Unit(Sort),
-    Function(Vec<Sort>, Sort),
-}
+// will be changed to an enum when inference is added
+type AbstractSort = (Vec<Sort>, Sort);
 
 #[derive(Clone, Debug)]
 struct Context<'a> {
@@ -153,13 +143,14 @@ fn check_term(context: &Context, term: &Term) -> Result<Sort, SortError> {
     match term {
         Term::Literal(_) => Ok(Sort::Bool),
         Term::Id(name) => match context.names.get(name) {
-            Some(AbstractSort::Unit(sort)) => Ok(sort.clone()),
-            Some(AbstractSort::Function(_, _)) => Err(SortError::Uncalled(name.clone())),
+            Some((args, ret)) if args.is_empty() => Ok(ret.clone()),
+            Some((_, _)) => Err(SortError::Uncalled(name.clone())),
             None => Err(SortError::UnknownName(name.clone())),
         },
         Term::App(f, xs) => match &**f {
             Term::Id(name) => match context.names.get(name) {
-                Some(AbstractSort::Function(args, ret)) => {
+                Some((args, _)) if args.is_empty() => Err(SortError::Uncallable(name.clone())),
+                Some((args, ret)) => {
                     if args.len() != xs.len() {
                         Err(SortError::ArgMismatch(name.clone(), args.len(), xs.len()))?
                     }
@@ -168,7 +159,6 @@ fn check_term(context: &Context, term: &Term) -> Result<Sort, SortError> {
                     }
                     Ok(ret.clone())
                 }
-                Some(AbstractSort::Unit(_)) => Err(SortError::Uncallable(name.clone())),
                 None => Err(SortError::UnknownName(name.clone())),
             },
             f => Err(SortError::HigherOrder(f.clone())),
@@ -210,11 +200,7 @@ fn check_term(context: &Context, term: &Term) -> Result<Sort, SortError> {
             let mut context = context.clone();
             for binder in binders {
                 check_sort(&context, &binder.sort)?;
-                context.add_name(
-                    binder.name.clone(),
-                    AbstractSort::Unit(binder.sort.clone()),
-                    true,
-                )?;
+                context.add_name(binder.name.clone(), (vec![], binder.sort.clone()), true)?;
             }
             sort_assert_eq(&Sort::Bool, &check_term(&context, body)?)?;
             Ok(Sort::Bool)
