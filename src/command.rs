@@ -186,16 +186,17 @@ impl App {
             }
         };
 
+        let r = sorts::check(&m);
+        if let Err(err) = r {
+            eprintln!("{:?}", err);
+            process::exit(1);
+        }
+
         match self.command {
             Command::Print { .. } => {
                 println!("{}", printer::fmt(&m));
             }
             Command::Verify(ref args @ VerifyArgs { houdini, .. }) => {
-                let r = sorts::check(&m);
-                if let Err(err) = r {
-                    panic!("{:?}", err);
-                }
-
                 let conf = args.get_solver_conf();
                 let r = verify_module(&conf, &m, houdini);
                 match r {
