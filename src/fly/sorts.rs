@@ -33,7 +33,7 @@ pub enum SortError {
     Uncallable(String),
 }
 
-fn sort_assert_eq(a: &Sort, b: &Sort) -> Result<(), SortError> {
+fn sort_eq(a: &Sort, b: &Sort) -> Result<(), SortError> {
     if a == b {
         Ok(())
     } else {
@@ -61,9 +61,9 @@ pub fn check(module: &Module) -> Result<(), SortError> {
 
     for rel in &module.signature.relations {
         for arg in &rel.args {
-            check_sort(&context, arg)?;
+            check_sort_exists(&context, arg)?;
         }
-        check_sort(&context, &rel.sort)?;
+        check_sort_exists(&context, &rel.sort)?;
         context.add_name(
             rel.name.clone(),
             (rel.args.clone(), rel.sort.clone()),
@@ -75,12 +75,12 @@ pub fn check(module: &Module) -> Result<(), SortError> {
         {
             let mut context = context.clone();
             for binder in &def.binders {
-                check_sort(&context, &binder.sort)?;
+                check_sort_exists(&context, &binder.sort)?;
                 context.add_name(binder.name.clone(), (vec![], binder.sort.clone()), true)?;
             }
-            check_sort(&context, &def.ret_sort)?;
-            let ret: Sort = check_term(&context, &def.body)?;
-            sort_assert_eq(&ret, &def.ret_sort)?;
+            check_sort_exists(&context, &def.ret_sort)?;
+            let ret: Sort = sort_of_term(&context, &def.body)?;
+            sort_eq(&ret, &def.ret_sort)?;
         }
 
         let args = def
@@ -93,12 +93,12 @@ pub fn check(module: &Module) -> Result<(), SortError> {
 
     for statement in &module.statements {
         match statement {
-            ThmStmt::Assume(term) => sort_assert_eq(&Sort::Bool, &check_term(&context, term)?)?,
+            ThmStmt::Assume(term) => sort_eq(&Sort::Bool, &sort_of_term(&context, term)?)?,
             ThmStmt::Assert(proof) => {
                 for invariant in &proof.invariants {
-                    sort_assert_eq(&Sort::Bool, &check_term(&context, &invariant.x)?)?;
+                    sort_eq(&Sort::Bool, &sort_of_term(&context, &invariant.x)?)?;
                 }
-                sort_assert_eq(&Sort::Bool, &check_term(&context, &proof.assert.x)?)?;
+                sort_eq(&Sort::Bool, &sort_of_term(&context, &proof.assert.x)?)?;
             }
         }
     }
@@ -129,7 +129,7 @@ impl Context<'_> {
     }
 }
 
-fn check_sort(context: &Context, sort: &Sort) -> Result<(), SortError> {
+fn check_sort_exists(context: &Context, sort: &Sort) -> Result<(), SortError> {
     match sort {
         Sort::Bool => Ok(()),
         Sort::Id(a) => match context.sorts.contains(a) {
@@ -139,7 +139,7 @@ fn check_sort(context: &Context, sort: &Sort) -> Result<(), SortError> {
     }
 }
 
-fn check_term(context: &Context, term: &Term) -> Result<Sort, SortError> {
+fn sort_of_term(context: &Context, term: &Term) -> Result<Sort, SortError> {
     match term {
         Term::Literal(_) => Ok(Sort::Bool),
         Term::Id(name) => match context.names.get(name) {
@@ -155,7 +155,7 @@ fn check_term(context: &Context, term: &Term) -> Result<Sort, SortError> {
                         Err(SortError::ArgMismatch(name.clone(), args.len(), xs.len()))?
                     }
                     for (x, arg) in xs.iter().zip(args) {
-                        sort_assert_eq(arg, &check_term(context, x)?)?;
+                        sort_eq(arg, &sort_of_term(context, x)?)?;
                     }
                     Ok(ret.clone())
                 }
@@ -164,32 +164,32 @@ fn check_term(context: &Context, term: &Term) -> Result<Sort, SortError> {
             f => Err(SortError::HigherOrder(f.clone())),
         },
         Term::UnaryOp(UOp::Not | UOp::Always | UOp::Eventually, x) => {
-            sort_assert_eq(&Sort::Bool, &check_term(context, x)?)?;
+            sort_eq(&Sort::Bool, &sort_of_term(context, x)?)?;
             Ok(Sort::Bool)
         }
-        Term::UnaryOp(UOp::Prime, x) => check_term(context, x),
+        Term::UnaryOp(UOp::Prime, x) => sort_of_term(context, x),
         Term::BinOp(BinOp::Equals | BinOp::NotEquals, x, y) => {
-            let a = check_term(context, x)?;
-            let b = check_term(context, y)?;
-            sort_assert_eq(&a, &b)?;
+            let a = sort_of_term(context, x)?;
+            let b = sort_of_term(context, y)?;
+            sort_eq(&a, &b)?;
             Ok(Sort::Bool)
         }
         Term::BinOp(BinOp::Implies | BinOp::Iff, x, y) => {
-            sort_assert_eq(&Sort::Bool, &check_term(context, x)?)?;
-            sort_assert_eq(&Sort::Bool, &check_term(context, y)?)?;
+            sort_eq(&Sort::Bool, &sort_of_term(context, x)?)?;
+            sort_eq(&Sort::Bool, &sort_of_term(context, y)?)?;
             Ok(Sort::Bool)
         }
         Term::NAryOp(NOp::And | NOp::Or, xs) => {
             for x in xs {
-                sort_assert_eq(&Sort::Bool, &check_term(context, x)?)?;
+                sort_eq(&Sort::Bool, &sort_of_term(context, x)?)?;
             }
             Ok(Sort::Bool)
         }
         Term::Ite { cond, then, else_ } => {
-            sort_assert_eq(&Sort::Bool, &check_term(context, cond)?)?;
-            let a = check_term(context, then)?;
-            let b = check_term(context, else_)?;
-            sort_assert_eq(&a, &b)?;
+            sort_eq(&Sort::Bool, &sort_of_term(context, cond)?)?;
+            let a = sort_of_term(context, then)?;
+            let b = sort_of_term(context, else_)?;
+            sort_eq(&a, &b)?;
             Ok(a)
         }
         Term::Quantified {
@@ -199,10 +199,10 @@ fn check_term(context: &Context, term: &Term) -> Result<Sort, SortError> {
         } => {
             let mut context = context.clone();
             for binder in binders {
-                check_sort(&context, &binder.sort)?;
+                check_sort_exists(&context, &binder.sort)?;
                 context.add_name(binder.name.clone(), (vec![], binder.sort.clone()), true)?;
             }
-            sort_assert_eq(&Sort::Bool, &check_term(&context, body)?)?;
+            sort_eq(&Sort::Bool, &sort_of_term(&context, body)?)?;
             Ok(Sort::Bool)
         }
     }
