@@ -25,6 +25,8 @@ pub enum SortError {
 
     #[error("higher order functions aren't supported")]
     HigherOrder(Term),
+    #[error("expected some number of args but found a different number")]
+    ArgMismatch(String, usize, usize),
     #[error("function expected arguments but didn't get them")]
     Uncalled(String),
     #[error("tried to call something that didn't take any args")]
@@ -158,6 +160,9 @@ fn check_term(context: &Context, term: &Term) -> Result<Sort, SortError> {
         Term::App(f, xs) => match &**f {
             Term::Id(name) => match context.names.get(name) {
                 Some(AbstractSort::Function(args, ret)) => {
+                    if args.len() != xs.len() {
+                        Err(SortError::ArgMismatch(name.clone(), args.len(), xs.len()))?
+                    }
                     for (x, arg) in xs.iter().zip(args) {
                         sort_assert_eq(arg, &check_term(context, x)?)?;
                     }
