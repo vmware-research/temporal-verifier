@@ -8,9 +8,8 @@ mutable p(thread): bool
 mutable q(thread): bool
 immutable t0: thread
 
-assume init
-assume (exists t:thread. p(t) & q(t)) & (p(t) & q(t))' = (p(t) & q(t)) | t = t0
-assume !q
+assume exists t:thread. p(t) & q(t) & (p(t) & q(t))' = (p(t) & q(t)) | t = t0
+assume forall t:thread. !q(t)
 assert p(t0)
 proof {
 

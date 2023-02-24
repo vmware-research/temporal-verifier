@@ -3,7 +3,25 @@ source: tests/test_examples.rs
 description: "--name=print -- print tests/examples/defs.fly"
 expression: combined_stdout_stderr
 ---
+sort thread
+mutable p(thread): bool
+mutable q(thread): bool
+immutable t0: thread
+
+def pq(t: thread) -> bool {
+  p(t) & q(t)
+}
+
+def next() -> bool {
+  exists t:thread. pq(t) & pq(t)' = pq(t) | t = t0
+}
+
+assume next
+assume forall t:thread. !q(t)
+assert p(t0)
+proof {
+
+}
 
 ======== STDERR: ===========
-UnknownName("t")
 
