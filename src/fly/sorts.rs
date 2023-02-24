@@ -74,10 +74,7 @@ pub fn check(module: &Module) -> Result<(), SortError> {
     for def in &module.defs {
         {
             let mut context = context.clone();
-            for binder in &def.binders {
-                check_sort_exists(&context, &binder.sort)?;
-                context.add_name(binder.name.clone(), (vec![], binder.sort.clone()), true)?;
-            }
+            context.add_binders(&def.binders)?;
             check_sort_exists(&context, &def.ret_sort)?;
             let ret: Sort = sort_of_term(&context, &def.body)?;
             sort_eq(&ret, &def.ret_sort)?;
@@ -126,6 +123,14 @@ impl Context<'_> {
             Some(_) if !allow_shadowing => Err(SortError::RedefinedName(name)),
             _ => Ok(()),
         }
+    }
+
+    fn add_binders(&mut self, binders: &[Binder]) -> Result<(), SortError> {
+        for binder in binders {
+            check_sort_exists(self, &binder.sort)?;
+            self.add_name(binder.name.clone(), (vec![], binder.sort.clone()), true)?;
+        }
+        Ok(())
     }
 }
 
@@ -198,10 +203,7 @@ fn sort_of_term(context: &Context, term: &Term) -> Result<Sort, SortError> {
             body,
         } => {
             let mut context = context.clone();
-            for binder in binders {
-                check_sort_exists(&context, &binder.sort)?;
-                context.add_name(binder.name.clone(), (vec![], binder.sort.clone()), true)?;
-            }
+            context.add_binders(binders)?;
             sort_eq(&Sort::Bool, &sort_of_term(&context, body)?)?;
             Ok(Sort::Bool)
         }
