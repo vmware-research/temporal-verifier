@@ -126,7 +126,11 @@ impl Context<'_> {
     }
 
     fn add_binders(&mut self, binders: &[Binder]) -> Result<(), SortError> {
+        let mut names = HashSet::new();
         for binder in binders {
+            if !names.insert(binder.name.clone()) {
+                Err(SortError::RedefinedName(binder.name.clone()))?
+            }
             check_sort_exists(self, &binder.sort)?;
             self.add_name(binder.name.clone(), (vec![], binder.sort.clone()), true)?;
         }
