@@ -1,0 +1,14 @@
+---
+source: tests/test_examples.rs
+description: "--expect-fail --all-solvers -- verify tests/examples/fail/sorts/sort_inference_basic.fly"
+expression: combined_stdout_stderr
+---
+
+======== STDERR: ===========
+error: could not parse file
+  ┌─ tests/examples/fail/sorts/sort_inference_basic.fly:6:16
+  │
+6 │ assert forall x. (forall y:s. y = x) & x
+  │                ^ expected ":"
+
+

@@ -1,0 +1,4 @@
+[[tests]]
+expect_fail = true
+all_solvers = true
+args = ["verify"]

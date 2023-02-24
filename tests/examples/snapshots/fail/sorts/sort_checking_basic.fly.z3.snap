@@ -1,0 +1,9 @@
+---
+source: tests/test_examples.rs
+description: "--expect-fail --all-solvers -- verify tests/examples/fail/sorts/sort_checking_basic.fly"
+expression: combined_stdout_stderr
+---
+
+======== STDERR: ===========
+NotEqual(Id("s"), Bool)
+
