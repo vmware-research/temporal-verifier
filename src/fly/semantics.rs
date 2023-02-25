@@ -201,13 +201,12 @@ impl Model {
                 );
                 self.interp[i].get(&[])
             }
-            Term::App(f, args) => {
+            Term::App(f, p, args) => {
                 let args: Vec<Element> = args.iter().map(|x| self.eval(x, assignment)).collect();
-                // ODED: is `&**f` really the right/idomatic thing here?
-                match &**f {
-                    Term::Id(name) => self.interp[self.signature.relation_idx(name)].get(&args),
-                    _ => panic!("tried to apply {f}"),
+                if *p != 0 {
+                    panic!("tried to eval {t}")
                 }
+                self.interp[self.signature.relation_idx(f)].get(&args)
             }
             Term::UnaryOp(Not, t) => {
                 let v = self.eval(t, assignment);
@@ -578,8 +577,8 @@ mod tests {
 
         let f = Literal(false);
         let t = Literal(true);
-        let r1 = Id("r1".to_string());
-        let r2 = Id("r2".to_string());
+        let r1 = "r1".to_string();
+        let r2 = "r2".to_string();
         let c1 = Id("c1".to_string());
         let c2 = Id("c2".to_string());
 
@@ -696,8 +695,8 @@ mod tests {
             (BinOp(Equals, b(&c1), b(&c1)), 1),
             (BinOp(NotEquals, b(&c1), b(&c1)), 0),
             //
-            (App(b(&r1), vec![c2.clone(), c1.clone()]), 0),
-            (App(b(&r2), vec![c1.clone()]), 2),
+            (App(r1, 0, vec![c2.clone(), c1.clone()]), 0),
+            (App(r2, 0, vec![c1.clone()]), 2),
         ]);
 
         for (t, v) in tests.iter() {

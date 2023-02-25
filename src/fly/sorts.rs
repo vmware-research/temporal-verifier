@@ -23,8 +23,6 @@ pub enum SortError {
     #[error("expected one type but found another")]
     NotEqual(Sort, Sort),
 
-    #[error("higher order functions aren't supported")]
-    HigherOrder(Term),
     #[error("expected some number of args but found a different number")]
     ArgMismatch(String, usize, usize),
     #[error("function expected arguments but didn't get them")]
@@ -156,21 +154,18 @@ fn sort_of_term(context: &Context, term: &Term) -> Result<Sort, SortError> {
             Some((_, _)) => Err(SortError::Uncalled(name.clone())),
             None => Err(SortError::UnknownName(name.clone())),
         },
-        Term::App(f, xs) => match &**f {
-            Term::Id(name) => match context.names.get(name) {
-                Some((args, _)) if args.is_empty() => Err(SortError::Uncallable(name.clone())),
-                Some((args, ret)) => {
-                    if args.len() != xs.len() {
-                        return Err(SortError::ArgMismatch(name.clone(), args.len(), xs.len()));
-                    }
-                    for (x, arg) in xs.iter().zip(args) {
-                        sort_eq(arg, &sort_of_term(context, x)?)?;
-                    }
-                    Ok(ret.clone())
+        Term::App(f, _p, xs) => match context.names.get(f) {
+            Some((args, _)) if args.is_empty() => Err(SortError::Uncallable(f.clone())),
+            Some((args, ret)) => {
+                if args.len() != xs.len() {
+                    return Err(SortError::ArgMismatch(f.clone(), args.len(), xs.len()));
                 }
-                None => Err(SortError::UnknownName(name.clone())),
-            },
-            f => Err(SortError::HigherOrder(f.clone())),
+                for (x, arg) in xs.iter().zip(args) {
+                    sort_eq(arg, &sort_of_term(context, x)?)?;
+                }
+                Ok(ret.clone())
+            }
+            None => Err(SortError::UnknownName(f.clone())),
         },
         Term::UnaryOp(UOp::Not | UOp::Always | UOp::Eventually, x) => {
             sort_eq(&Sort::Bool, &sort_of_term(context, x)?)?;

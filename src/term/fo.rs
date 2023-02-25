@@ -61,7 +61,7 @@ fn unrolling(t: &Term) -> Unrolling {
     use Unrolling::Finite;
     match t {
         Term::Literal(_) | Term::Id(_) => Finite(0),
-        Term::App(f, x) => unrolling(f) & max_unrolling(x),
+        Term::App(_f, p, x) => Finite(*p) & max_unrolling(x),
         Term::UnaryOp(Always | Eventually, _) => Unrolling::Infinite,
         Term::UnaryOp(Not, t) => unrolling(t),
         Term::UnaryOp(Prime, t) => Finite(1) + unrolling(t),

@@ -27,7 +27,7 @@ fn with_next(t: &Term, bound: im::HashSet<String>, next: usize) -> Term {
             if bound.contains(s) { 0 } else { next },
         ),
         // TODO: we do not add primes to arguments; this is just a heuristic
-        Term::App(f, xs) => Term::App(go_box(f), xs.iter().map(go).collect()),
+        Term::App(f, p, xs) => Term::App(f.clone(), p + next, xs.iter().map(go).collect()),
 
         // boring recursive cases
         Term::Literal(b) => Term::Literal(*b),

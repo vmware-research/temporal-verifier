@@ -11,8 +11,7 @@ fn subst(t: &mut Term, repl: &HashMap<String, &Term>) {
                 *t = y.clone();
             }
         }
-        Term::App(f, xs) => {
-            go(f);
+        Term::App(_f, _p, xs) => {
             for t in xs {
                 go(t);
             }
@@ -53,16 +52,12 @@ fn inline_def_term(def: &Definition, t: &mut Term) {
                 *t = body.clone();
             }
         }
-        Term::App(f, ts) => {
-            if let Term::Id(s) = f.as_ref() {
-                if s == &def.name {
-                    // substitute ts for def.binders in body before doing the replacement
-                    let mut body = body.clone();
-                    subst_binders(&mut body, &def.binders, ts);
-                    *t = body;
-                }
-            } else {
-                unimplemented!("inlining into application of complex term {f}");
+        Term::App(f, _p, ts) => {
+            if f == &def.name {
+                // substitute ts for def.binders in body before doing the replacement
+                let mut body = body.clone();
+                subst_binders(&mut body, &def.binders, ts);
+                *t = body;
             }
         }
         Term::UnaryOp(_, x) => go(x),

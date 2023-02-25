@@ -45,8 +45,7 @@ pub struct Binder {
 pub enum Term {
     Literal(bool),
     Id(String),
-    // ODED: I think we should have App(String, Vec<Term>), since we're not high-order (yet)
-    App(Box<Term>, Vec<Term>),
+    App(String, usize, Vec<Term>),
     UnaryOp(UOp, Box<Term>),
     BinOp(BinOp, Box<Term>, Box<Term>),
     NAryOp(NOp, Vec<Term>),
@@ -297,7 +296,8 @@ impl Signature {
                         {
                             let term_vec = args.iter().map(|&x| x.clone()).collect();
                             new_new_terms[sort_idx(&rel_decl.sort)].push(Term::App(
-                                Box::new(Term::Id(rel_decl.name.clone())),
+                                rel_decl.name.clone(),
+                                0,
                                 term_vec,
                             ));
                         }

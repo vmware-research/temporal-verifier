@@ -66,7 +66,7 @@ grammar parser() for str {
         --
         // note that no space is allowed between relation name and args, so p (q)
         // doesn't parse as a relation call
-        t:(@) "(" args:(term() ** (_ "," _)) ")" { Term::App(Box::new(t), args) }
+        f:ident() ps:("\'"*) "(" args:(term() ** (_ "," _)) ")" { Term::App(f, ps.len(), args) }
         s:ident() { match s.as_str() {
             "false" => Term::Literal(false),
             "true" => Term::Literal(true),
@@ -197,13 +197,6 @@ mod tests {
 
         term("p(x, y)").unwrap();
         term("p(x,y)").unwrap();
-
-        // not first order (but eventually f might be a meta abstraction that
-        // reduces to a relation)
-        term("(f(x))(a, b)").unwrap();
-
-        // non-sensical but does parse
-        term("(!p)(a)").unwrap();
 
         // & and | at the same level are grouped into a single NAry
         assert_eq!(term("(p & q) & r").unwrap(), term("p & q & r").unwrap());

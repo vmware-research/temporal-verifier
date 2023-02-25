@@ -20,8 +20,9 @@ pub fn substitute_qf(term: &Term, substitution: &Substitution) -> Term {
             }
         }
 
-        Term::App(f, args) => Term::App(
+        Term::App(f, p, args) => Term::App(
             f.clone(),
+            *p,
             args.iter()
                 .map(|a| substitute_qf(a, substitution))
                 .collect(),
