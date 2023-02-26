@@ -1,0 +1,15 @@
+---
+source: tests/test_examples.rs
+description: "--expect-fail --all-solvers -- verify tests/examples/fail/sorts/def_wrong_arg.fly"
+expression: combined_stdout_stderr
+---
+
+======== STDERR: ===========
+sort checking error:
+error: expected s but found bool
+   ┌─ tests/examples/fail/sorts/def_wrong_arg.fly:10:1
+   │
+10 │ assert forall x:bool, y:s. f(x, y)
+   │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+

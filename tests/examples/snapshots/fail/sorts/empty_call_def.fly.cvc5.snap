@@ -1,0 +1,15 @@
+---
+source: tests/test_examples.rs
+description: "--expect-fail --all-solvers -- verify tests/examples/fail/sorts/empty_call_def.fly"
+expression: combined_stdout_stderr
+---
+
+======== STDERR: ===========
+sort checking error:
+error: f was called but didn't take any args
+  ┌─ tests/examples/fail/sorts/empty_call_def.fly:8:1
+  │
+8 │ assert f()
+  │ ^^^^^^^^^^
+
+

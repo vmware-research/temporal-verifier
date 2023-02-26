@@ -1,0 +1,15 @@
+---
+source: tests/test_examples.rs
+description: "--expect-fail --all-solvers -- verify tests/examples/fail/sorts/def_arg_count.fly"
+expression: combined_stdout_stderr
+---
+
+======== STDERR: ===========
+sort checking error:
+error: expected 2 args but found 1 args for f
+   ┌─ tests/examples/fail/sorts/def_arg_count.fly:10:1
+   │
+10 │ assert forall x:s, y:s. f(x)
+   │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+

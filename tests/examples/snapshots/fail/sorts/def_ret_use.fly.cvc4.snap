@@ -1,0 +1,15 @@
+---
+source: tests/test_examples.rs
+description: "--expect-fail --all-solvers -- verify tests/examples/fail/sorts/def_ret_use.fly"
+expression: combined_stdout_stderr
+---
+
+======== STDERR: ===========
+sort checking error:
+error: expected bool but found s
+   ┌─ tests/examples/fail/sorts/def_ret_use.fly:10:1
+   │
+10 │ assert forall x:s, y:s. exists z:s. f(x, y) = z
+   │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+

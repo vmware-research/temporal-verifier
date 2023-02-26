@@ -1,0 +1,10 @@
+# Copyright 2022-2023 VMware, Inc.
+# SPDX-License-Identifier: BSD-2-Clause
+
+sort s
+
+def f(x: s, y: s) -> s {
+  x = y
+}
+
+assert forall x:s, y:s. f(x) = x
