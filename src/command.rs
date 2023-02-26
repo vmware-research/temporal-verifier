@@ -1,6 +1,7 @@
 // Copyright 2022-2023 VMware, Inc.
 // SPDX-License-Identifier: BSD-2-Clause
 
+use codespan_reporting::diagnostic::{Diagnostic, Label};
 use std::rc::Rc;
 use std::{fs, path::PathBuf, process};
 
@@ -187,8 +188,15 @@ impl App {
         };
 
         let r = sorts::check(&m);
-        if let Err(err) = r {
-            eprintln!("{:?}", err);
+        if let Err((err, span)) = r {
+            eprintln!("sort checking error:");
+
+            let mut diagnostic = Diagnostic::error().with_message(format!("{}", err));
+            if let Some(span) = span {
+                diagnostic = diagnostic.with_labels(vec![Label::primary((), span.start..span.end)]);
+            }
+            terminal::emit(&mut writer.lock(), &config, &files, &diagnostic).unwrap();
+
             process::exit(1);
         }
 

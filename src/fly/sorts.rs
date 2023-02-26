@@ -10,24 +10,24 @@ pub enum SortError {
     #[error("module signature should not contain bool")]
     UninterpretedBool,
 
-    #[error("this sort was not declared")]
+    #[error("sort {0} was not declared")]
     UnknownSort(String),
-    #[error("this sort was defined multiple times")]
+    #[error("sort {0} was defined multiple times")]
     RedefinedSort(String),
 
-    #[error("this identifier was unknown")]
+    #[error("{0} was unknown")]
     UnknownName(String),
-    #[error("this identifier was declared multiple times")]
+    #[error("{0} was declared multiple times")]
     RedefinedName(String),
 
-    #[error("expected one type but found another")]
+    #[error("expected {0} but found {1}")]
     NotEqual(Sort, Sort),
 
-    #[error("expected some number of args but found a different number")]
+    #[error("expected {1} args but found {2} args for {0}")]
     ArgMismatch(String, usize, usize),
-    #[error("function expected arguments but didn't get them")]
+    #[error("{0} expected args but didn't get them")]
     Uncalled(String),
-    #[error("tried to call something that didn't take any args")]
+    #[error("{0} was called but didn't take any args")]
     Uncallable(String),
 
     #[error("sort inference isn't supported yet")]
@@ -42,61 +42,88 @@ fn sort_eq(a: &Sort, b: &Sort) -> Result<(), SortError> {
     }
 }
 
-pub fn check(module: &Module) -> Result<(), SortError> {
-    let mut sorts = HashSet::new();
-    for sort in &module.signature.sorts {
-        match sort {
-            Sort::Bool => return Err(SortError::UninterpretedBool),
-            Sort::Id(s) => {
-                if !sorts.insert(s.clone()) {
-                    return Err(SortError::RedefinedSort(s.clone()));
+pub fn check(module: &Module) -> Result<(), (SortError, Option<Span>)> {
+    let build_context = || {
+        let mut sorts = HashSet::new();
+        for sort in &module.signature.sorts {
+            match sort {
+                Sort::Bool => return Err(SortError::UninterpretedBool),
+                Sort::Id(s) => {
+                    if !sorts.insert(s.clone()) {
+                        return Err(SortError::RedefinedSort(s.clone()));
+                    }
                 }
             }
         }
-    }
 
-    let mut context = Context {
-        sorts: &sorts,
-        names: im::HashMap::new(),
+        let mut context = Context {
+            sorts,
+            names: im::HashMap::new(),
+        };
+
+        for rel in &module.signature.relations {
+            for arg in &rel.args {
+                check_sort_exists(&context, arg)?;
+            }
+            check_sort_exists(&context, &rel.sort)?;
+            context.add_name(
+                rel.name.clone(),
+                (rel.args.clone(), rel.sort.clone()),
+                false,
+            )?;
+        }
+
+        for def in &module.defs {
+            {
+                let mut context = context.clone();
+                context.add_binders(&def.binders)?;
+                check_sort_exists(&context, &def.ret_sort)?;
+                let ret: Sort = sort_of_term(&context, &def.body)?;
+                sort_eq(&ret, &def.ret_sort)?;
+            }
+
+            let args = def
+                .binders
+                .iter()
+                .map(|binder| binder.sort.clone())
+                .collect();
+            context.add_name(def.name.clone(), (args, def.ret_sort.clone()), false)?;
+        }
+
+        Ok(context)
     };
 
-    for rel in &module.signature.relations {
-        for arg in &rel.args {
-            check_sort_exists(&context, arg)?;
-        }
-        check_sort_exists(&context, &rel.sort)?;
-        context.add_name(
-            rel.name.clone(),
-            (rel.args.clone(), rel.sort.clone()),
-            false,
-        )?;
-    }
-
-    for def in &module.defs {
-        {
-            let mut context = context.clone();
-            context.add_binders(&def.binders)?;
-            check_sort_exists(&context, &def.ret_sort)?;
-            let ret: Sort = sort_of_term(&context, &def.body)?;
-            sort_eq(&ret, &def.ret_sort)?;
-        }
-
-        let args = def
-            .binders
-            .iter()
-            .map(|binder| binder.sort.clone())
-            .collect();
-        context.add_name(def.name.clone(), (args, def.ret_sort.clone()), false)?;
-    }
+    let context = match build_context() {
+        Ok(context) => context,
+        Err(e) => return Err((e, None)),
+    };
 
     for statement in &module.statements {
         match statement {
-            ThmStmt::Assume(term) => sort_eq(&Sort::Bool, &sort_of_term(&context, term)?)?,
+            ThmStmt::Assume(term) => match sort_of_term(&context, term) {
+                Ok(sort) => match sort_eq(&Sort::Bool, &sort) {
+                    Ok(()) => {}
+                    Err(e) => return Err((e, None)),
+                },
+                Err(e) => return Err((e, None)),
+            },
             ThmStmt::Assert(proof) => {
                 for invariant in &proof.invariants {
-                    sort_eq(&Sort::Bool, &sort_of_term(&context, &invariant.x)?)?;
+                    match sort_of_term(&context, &invariant.x) {
+                        Ok(sort) => match sort_eq(&Sort::Bool, &sort) {
+                            Ok(()) => {}
+                            Err(e) => return Err((e, Some(invariant.span))),
+                        },
+                        Err(e) => return Err((e, Some(invariant.span))),
+                    }
                 }
-                sort_eq(&Sort::Bool, &sort_of_term(&context, &proof.assert.x)?)?;
+                match sort_of_term(&context, &proof.assert.x) {
+                    Ok(sort) => match sort_eq(&Sort::Bool, &sort) {
+                        Ok(()) => {}
+                        Err(e) => return Err((e, Some(proof.assert.span))),
+                    },
+                    Err(e) => return Err((e, Some(proof.assert.span))),
+                }
             }
         }
     }
@@ -108,12 +135,12 @@ pub fn check(module: &Module) -> Result<(), SortError> {
 type AbstractSort = (Vec<Sort>, Sort);
 
 #[derive(Clone, Debug)]
-struct Context<'a> {
-    sorts: &'a HashSet<String>,
+struct Context {
+    sorts: HashSet<String>, // never changed
     names: im::HashMap<String, AbstractSort>,
 }
 
-impl Context<'_> {
+impl Context {
     fn add_name(
         &mut self,
         name: String,
@@ -142,7 +169,7 @@ impl Context<'_> {
 fn check_sort_exists(context: &Context, sort: &Sort) -> Result<(), SortError> {
     match sort {
         Sort::Bool => Ok(()),
-        Sort::Id(a) if a == "" => Err(SortError::NoInference),
+        Sort::Id(a) if a.is_empty() => Err(SortError::NoInference),
         Sort::Id(a) => match context.sorts.contains(a) {
             true => Ok(()),
             false => Err(SortError::UnknownSort(a.clone())),
