@@ -1,0 +1,15 @@
+---
+source: tests/test_examples.rs
+description: "--expect-fail --all-solvers -- verify tests/examples/fail/sorts/arg_count_mismatch.fly"
+expression: combined_stdout_stderr
+---
+
+======== STDERR: ===========
+sort checking error:
+error: expected 1 args but found 2 args for r
+  ┌─ tests/examples/fail/sorts/arg_count_mismatch.fly:7:1
+  │
+7 │ assert forall x:s. r(x, false)
+  │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+
