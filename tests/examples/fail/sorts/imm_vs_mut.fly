@@ -1,0 +1,15 @@
+# Copyright 2022-2023 VMware, Inc.
+# SPDX-License-Identifier: BSD-2-Clause
+
+sort s
+
+mutable a: s
+immutable b: bool
+
+assert forall x:s. eventually a = x
+assert b
+
+assert forall x:s. a = x
+assert eventually b
+
+assume a = b

@@ -1,0 +1,11 @@
+---
+source: tests/test_examples.rs
+description: "--expect-fail --all-solvers -- verify tests/examples/fail/sorts/imm_vs_mut.fly"
+expression: combined_stdout_stderr
+---
+
+======== STDERR: ===========
+sort checking error:
+error: expected s but found bool
+
+
