@@ -5,5 +5,5 @@ expression: combined_stdout_stderr
 ---
 
 ======== STDERR: ===========
-UnknownSort("")
+NoInference
 

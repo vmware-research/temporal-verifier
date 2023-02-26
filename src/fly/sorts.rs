@@ -29,6 +29,9 @@ pub enum SortError {
     Uncalled(String),
     #[error("tried to call something that didn't take any args")]
     Uncallable(String),
+
+    #[error("sort inference isn't supported yet")]
+    NoInference,
 }
 
 fn sort_eq(a: &Sort, b: &Sort) -> Result<(), SortError> {
@@ -139,6 +142,7 @@ impl Context<'_> {
 fn check_sort_exists(context: &Context, sort: &Sort) -> Result<(), SortError> {
     match sort {
         Sort::Bool => Ok(()),
+        Sort::Id(a) if a == "" => Err(SortError::NoInference),
         Sort::Id(a) => match context.sorts.contains(a) {
             true => Ok(()),
             false => Err(SortError::UnknownSort(a.clone())),
