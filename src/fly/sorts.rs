@@ -34,6 +34,7 @@ pub enum SortError {
     NoInference,
 }
 
+// helper function to clean up repeated if statements
 fn sort_eq(a: &Sort, b: &Sort) -> Result<(), SortError> {
     if a == b {
         Ok(())
@@ -42,6 +43,7 @@ fn sort_eq(a: &Sort, b: &Sort) -> Result<(), SortError> {
     }
 }
 
+// entry point for the sort checker
 pub fn check(module: &Module) -> Result<(), (SortError, Option<Span>)> {
     let build_context = || {
         let mut sorts = HashSet::new();
@@ -63,9 +65,9 @@ pub fn check(module: &Module) -> Result<(), (SortError, Option<Span>)> {
 
         for rel in &module.signature.relations {
             for arg in &rel.args {
-                check_sort_exists(&context, arg)?;
+                context.check_sort_exists(arg)?;
             }
-            check_sort_exists(&context, &rel.sort)?;
+            context.check_sort_exists(&rel.sort)?;
             context.add_name(
                 rel.name.clone(),
                 (rel.args.clone(), rel.sort.clone()),
@@ -77,7 +79,7 @@ pub fn check(module: &Module) -> Result<(), (SortError, Option<Span>)> {
             {
                 let mut context = context.clone();
                 context.add_binders(&def.binders)?;
-                check_sort_exists(&context, &def.ret_sort)?;
+                context.check_sort_exists(&def.ret_sort)?;
                 let ret: Sort = sort_of_term(&context, &def.body)?;
                 sort_eq(&ret, &def.ret_sort)?;
             }
@@ -141,6 +143,20 @@ struct Context {
 }
 
 impl Context {
+    // all sorts must be declared in the module signature
+    // this function checks that, assuming that it gets called on all sorts
+    fn check_sort_exists(&self, sort: &Sort) -> Result<(), SortError> {
+        match sort {
+            Sort::Bool => Ok(()),
+            Sort::Id(a) if a.is_empty() => Err(SortError::NoInference),
+            Sort::Id(a) => match self.sorts.contains(a) {
+                true => Ok(()),
+                false => Err(SortError::UnknownSort(a.clone())),
+            },
+        }
+    }
+
+    // adds `(name, sort)` to `context`, potentially giving an error if name already exists
     fn add_name(
         &mut self,
         name: String,
@@ -153,30 +169,22 @@ impl Context {
         }
     }
 
+    // doesn't allow `binders` to shadow each other, but does allow them to
+    // shadow names already in `context`
     fn add_binders(&mut self, binders: &[Binder]) -> Result<(), SortError> {
         let mut names = HashSet::new();
         for binder in binders {
             if !names.insert(binder.name.clone()) {
                 return Err(SortError::RedefinedName(binder.name.clone()));
             }
-            check_sort_exists(self, &binder.sort)?;
+            self.check_sort_exists(&binder.sort)?;
             self.add_name(binder.name.clone(), (vec![], binder.sort.clone()), true)?;
         }
         Ok(())
     }
 }
 
-fn check_sort_exists(context: &Context, sort: &Sort) -> Result<(), SortError> {
-    match sort {
-        Sort::Bool => Ok(()),
-        Sort::Id(a) if a.is_empty() => Err(SortError::NoInference),
-        Sort::Id(a) => match context.sorts.contains(a) {
-            true => Ok(()),
-            false => Err(SortError::UnknownSort(a.clone())),
-        },
-    }
-}
-
+// recursively finds the sort of a term
 fn sort_of_term(context: &Context, term: &Term) -> Result<Sort, SortError> {
     match term {
         Term::Literal(_) => Ok(Sort::Bool),
