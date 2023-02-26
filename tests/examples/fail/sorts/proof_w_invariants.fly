@@ -1,0 +1,13 @@
+# Copyright 2022-2023 VMware, Inc.
+# SPDX-License-Identifier: BSD-2-Clause
+
+sort s
+mutable x:s
+
+assume forall x:s. x = x
+
+assert forall a:s. always x = a
+proof {
+	invariant forall a:s, b:s. a = b
+	invariant x
+}

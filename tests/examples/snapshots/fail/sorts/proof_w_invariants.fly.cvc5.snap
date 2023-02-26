@@ -1,0 +1,15 @@
+---
+source: tests/test_examples.rs
+description: "--expect-fail --all-solvers -- verify tests/examples/fail/sorts/proof_w_invariants.fly"
+expression: combined_stdout_stderr
+---
+
+======== STDERR: ===========
+sort checking error:
+error: expected bool but found s
+   ┌─ tests/examples/fail/sorts/proof_w_invariants.fly:12:2
+   │
+12 │     invariant x
+   │     ^^^^^^^^^^^
+
+
