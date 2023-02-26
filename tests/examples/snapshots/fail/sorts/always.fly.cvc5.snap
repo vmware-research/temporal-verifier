@@ -1,0 +1,15 @@
+---
+source: tests/test_examples.rs
+description: "--expect-fail --all-solvers -- verify tests/examples/fail/sorts/always.fly"
+expression: combined_stdout_stderr
+---
+
+======== STDERR: ===========
+sort checking error:
+error: expected bool but found s
+  ┌─ tests/examples/fail/sorts/always.fly:7:1
+  │
+7 │ assert always eventually x
+  │ ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+

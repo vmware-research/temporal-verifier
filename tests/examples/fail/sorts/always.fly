@@ -1,0 +1,7 @@
+# Copyright 2022-2023 VMware, Inc.
+# SPDX-License-Identifier: BSD-2-Clause
+
+sort s
+mutable x: s
+
+assert always eventually x

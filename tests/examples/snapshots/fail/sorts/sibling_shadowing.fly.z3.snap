@@ -1,0 +1,15 @@
+---
+source: tests/test_examples.rs
+description: "--expect-fail --all-solvers -- verify tests/examples/fail/sorts/sibling_shadowing.fly"
+expression: combined_stdout_stderr
+---
+
+======== STDERR: ===========
+sort checking error:
+error: x was declared multiple times
+  ┌─ tests/examples/fail/sorts/sibling_shadowing.fly:4:1
+  │
+4 │ assert exists x:bool, x:bool. x
+  │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+

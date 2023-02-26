@@ -1,0 +1,4 @@
+# Copyright 2022-2023 VMware, Inc.
+# SPDX-License-Identifier: BSD-2-Clause
+
+assert exists x:bool, x:bool. x
