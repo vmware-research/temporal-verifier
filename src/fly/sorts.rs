@@ -7,9 +7,6 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum SortError {
-    #[error("module signature should not contain bool")]
-    UninterpretedBool,
-
     #[error("sort {0} was not declared")]
     UnknownSort(String),
     #[error("sort {0} was defined multiple times")]
@@ -48,13 +45,8 @@ pub fn check(module: &Module) -> Result<(), (SortError, Option<Span>)> {
     let build_context = || {
         let mut sorts = HashSet::new();
         for sort in &module.signature.sorts {
-            match sort {
-                Sort::Bool => return Err(SortError::UninterpretedBool),
-                Sort::Id(s) => {
-                    if !sorts.insert(s.clone()) {
-                        return Err(SortError::RedefinedSort(s.clone()));
-                    }
-                }
+            if !sorts.insert(sort.clone()) {
+                return Err(SortError::RedefinedSort(sort.clone()));
             }
         }
 

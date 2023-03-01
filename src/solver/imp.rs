@@ -85,7 +85,7 @@ impl<B: Backend> Solver<B> {
     /// to emit each mutable symbol.
     fn send_signature(proc: &mut SmtProc, sig: &Signature, n_states: usize) {
         for sort in &sig.sorts {
-            proc.send(&app("declare-sort", [sexp::sort(sort), atom_i(0)]));
+            proc.send(&app("declare-sort", [atom_s(sort.clone()), atom_i(0)]));
         }
         for r in &sig.relations {
             // immutable symbols are always declared once
@@ -257,7 +257,7 @@ impl<B: Backend> Solver<B> {
         let mut model = self.get_fo_model();
         let universes = self.signature.sorts.clone();
         for univ in universes {
-            self.minimize_card(&mut assumptions, &mut model, univ.id().unwrap());
+            self.minimize_card(&mut assumptions, &mut model, &univ);
         }
         model.into_trace(&self.signature, self.n_states)
     }
@@ -320,14 +320,10 @@ impl FOModel {
             .sorts
             .iter()
             .map(|s| {
-                if let Sort::Id(s) = s {
-                    *self
-                        .universe
-                        .get(s)
-                        .unwrap_or_else(|| panic!("unknown sort {s} in model"))
-                } else {
-                    panic!("unexpected sort in signature")
-                }
+                *self
+                    .universe
+                    .get(s)
+                    .unwrap_or_else(|| panic!("unknown sort {s} in model"))
             })
             .collect();
         let mut states: Vec<Model> = vec![];

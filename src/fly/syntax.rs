@@ -159,15 +159,6 @@ impl Sort {
     pub fn new<S: AsRef<str>>(s: S) -> Self {
         Self::Id(s.as_ref().to_string())
     }
-
-    /// Get the name of this sort if it's a user-declared sort, or None for the
-    /// built-in Bool.
-    pub fn id(&self) -> Option<&str> {
-        match self {
-            Sort::Bool => None,
-            Sort::Id(s) => Some(s),
-        }
-    }
 }
 
 impl fmt::Display for Sort {
@@ -192,17 +183,20 @@ pub struct RelationDecl {
 
 #[derive(PartialEq, Eq, Clone, Debug, Serialize)]
 pub struct Signature {
-    /// sorts shouldn't contain Bool, it should contain only uninterpreted sorts
-    pub sorts: Vec<Sort>,
+    pub sorts: Vec<String>, // only contains uninterpreted sorts
     pub relations: Vec<RelationDecl>,
 }
 
 impl Signature {
     pub fn sort_idx(&self, sort: &Sort) -> usize {
-        self.sorts
-            .iter()
-            .position(|x| x == sort)
-            .unwrap_or_else(|| panic!("invalid sort {sort}"))
+        match sort {
+            Sort::Bool => panic!("invalid sort {sort}"),
+            Sort::Id(sort) => self
+                .sorts
+                .iter()
+                .position(|x| x == sort)
+                .unwrap_or_else(|| panic!("invalid sort {sort}")),
+        }
     }
 
     /// Get the declaration for a given name.
@@ -392,7 +386,7 @@ mod tests {
         let sort = |n: usize| Sort::Id(format!("T{n}"));
 
         let mut sig = Signature {
-            sorts: vec![sort(1), sort(2)],
+            sorts: vec!["T1".to_string(), "T2".to_string()],
             relations: vec![
                 RelationDecl {
                     mutable: true,
@@ -508,7 +502,7 @@ mod tests {
         );
 
         sig = Signature {
-            sorts: vec![sort(1), sort(2)],
+            sorts: vec!["T1".to_string(), "T2".to_string()],
             relations: vec![
                 RelationDecl {
                     mutable: true,

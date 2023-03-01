@@ -11,7 +11,7 @@ fails:
       Sat:
         signature:
           sorts:
-            - Id: thread
+            - thread
           relations:
             - mutable: true
               name: p

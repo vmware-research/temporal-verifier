@@ -210,7 +210,7 @@ fn signature(sig: &Signature) -> String {
         .sorts
         .iter()
         // end with trailing newline if there are any sorts
-        .map(|s| format!("sort {}\n", sort(s)))
+        .map(|s| format!("sort {}\n", s))
         .collect::<Vec<_>>()
         .join("");
     let relations = sig

@@ -79,8 +79,8 @@ grammar parser() for str {
     = ("bool" word_boundary() { Sort::Bool }) /
       s:ident() { Sort::Id(s) }
 
-    rule sort_decl() -> Sort
-    = "sort" __ s:sort() { s }
+    rule sort_decl() -> String
+    = "sort" __ s:ident() { s }
 
     // matches whitespace with at least one newline
     rule newline_separator()

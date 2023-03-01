@@ -319,23 +319,20 @@ impl Model {
         let mut exists_binders: Vec<Binder> = vec![];
         let mut assignment: Assignment = Assignment::new();
         for i in 0..sort_cnt {
-            if let Sort::Id(sort_name) = &self.signature.sorts[i] {
-                // EDEN: We should use some convention so the names here will not be available for use elsewhere.
-                exists_vars.push(
-                    (0..self.universe[i])
-                        .map(|j| format!("{}_{}", sort_name.clone(), j))
-                        .collect(),
-                );
-                univ_vars.push(format!("{}_{}", sort_name.clone(), self.universe[i]));
-                for (j, name) in exists_vars[i].iter().enumerate() {
-                    assignment.insert(name.clone(), j);
-                    exists_binders.push(Binder {
-                        name: name.clone(),
-                        sort: self.signature.sorts[i].clone(),
-                    });
-                }
-            } else {
-                panic!("Bool sort in signature.")
+            let sort_name = &self.signature.sorts[i];
+            // EDEN: We should use some convention so the names here will not be available for use elsewhere.
+            exists_vars.push(
+                (0..self.universe[i])
+                    .map(|j| format!("{}_{}", sort_name.clone(), j))
+                    .collect(),
+            );
+            univ_vars.push(format!("{}_{}", sort_name.clone(), self.universe[i]));
+            for (j, name) in exists_vars[i].iter().enumerate() {
+                assignment.insert(name.clone(), j);
+                exists_binders.push(Binder {
+                    name: name.clone(),
+                    sort: Sort::Id(self.signature.sorts[i].clone()),
+                });
             }
         }
 
@@ -368,7 +365,7 @@ impl Model {
                 quantifier: Quantifier::Forall,
                 binders: vec![Binder {
                     name: univ_vars[i].clone(),
-                    sort: self.signature.sorts[i].clone(),
+                    sort: Sort::Id(self.signature.sorts[i].clone()),
                 }],
                 body: Box::new(Term::NAryOp(
                     NOp::Or,
@@ -435,7 +432,7 @@ mod tests {
         let sort = |n: usize| Sort::Id(format!("T{n}"));
 
         let sig = Signature {
-            sorts: vec![sort(1), sort(2)],
+            sorts: vec!["T1".to_string(), "T2".to_string()],
             relations: vec![
                 RelationDecl {
                     mutable: true,
@@ -509,7 +506,7 @@ mod tests {
         let sort = |n: usize| Sort::Id(format!("T{n}"));
 
         let sig = Signature {
-            sorts: vec![sort(1), sort(2)],
+            sorts: vec!["T1".to_string(), "T2".to_string()],
             relations: vec![
                 RelationDecl {
                     mutable: true,
@@ -710,7 +707,7 @@ mod tests {
         let sort = |n: usize| Sort::Id(format!("T{n}"));
 
         let sig = Signature {
-            sorts: vec![sort(1), sort(2)],
+            sorts: vec!["T1".to_string(), "T2".to_string()],
             relations: vec![
                 RelationDecl {
                     mutable: true,
