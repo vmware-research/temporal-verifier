@@ -12,6 +12,10 @@ pub enum UOp {
     Prime,
     Always,
     Eventually,
+    /// Used for the l2s construction (may end up replaced with just Prime)
+    Next,
+    /// Past operator, used only for the l2s construction
+    Previously,
 }
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug, Hash)]
@@ -20,6 +24,10 @@ pub enum BinOp {
     NotEquals,
     Implies,
     Iff,
+    /// Used for the l2s construction
+    Until,
+    /// Past operator, used only for the l2s construction
+    Since,
 }
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug, Hash)]
@@ -40,7 +48,6 @@ pub struct Binder {
     pub sort: Sort,
 }
 
-// ODED: maybe Term should be Copy? (see test_eval in semantics.rs)
 #[derive(PartialEq, Eq, Clone, Debug, Hash)]
 pub enum Term {
     Literal(bool),
@@ -49,7 +56,6 @@ pub enum Term {
     UnaryOp(UOp, Box<Term>),
     BinOp(BinOp, Box<Term>, Box<Term>),
     NAryOp(NOp, Vec<Term>),
-    #[allow(dead_code)]
     Ite {
         cond: Box<Term>,
         then: Box<Term>,

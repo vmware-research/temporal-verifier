@@ -7,7 +7,7 @@
 
 use std::cmp::max;
 
-use crate::fly::syntax::{Term, UOp};
+use crate::fly::syntax::{BinOp, Term, UOp};
 
 use UOp::*;
 
@@ -64,7 +64,11 @@ fn unrolling(t: &Term) -> Unrolling {
         Term::App(_f, p, x) => Finite(*p) & max_unrolling(x),
         Term::UnaryOp(Always | Eventually, _) => Unrolling::Infinite,
         Term::UnaryOp(Not, t) => unrolling(t),
-        Term::UnaryOp(Prime, t) => Finite(1) + unrolling(t),
+        Term::UnaryOp(Prime, t) | Term::UnaryOp(Next, t) => Finite(1) + unrolling(t),
+        Term::UnaryOp(Previously, _) | Term::BinOp(BinOp::Since, _, _) => {
+            panic!("attempt to get unrolling of past operator")
+        }
+        Term::BinOp(BinOp::Until, _, _) => Unrolling::Infinite,
         Term::BinOp(_, lhs, rhs) => unrolling(lhs) & unrolling(rhs),
         Term::NAryOp(_, ts) => max_unrolling(ts),
         Term::Ite { cond, then, else_ } => unrolling(cond) & unrolling(then) & unrolling(else_),

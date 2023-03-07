@@ -296,7 +296,10 @@ impl Model {
                     0
                 }
             }
-            Term::UnaryOp(Always | Eventually | Prime, _) => panic!("tried to eval {t}"),
+            Term::UnaryOp(Always | Eventually | Prime | Next | Previously, _)
+            | Term::BinOp(Until | Since, _, _) => {
+                panic!("tried to eval temporal {t}")
+            }
         }
     }
 

@@ -18,6 +18,8 @@ fn precedence(t: &Term) -> usize {
         Ite { .. } => 30,
         NAryOp(Or, _) => 40,
         NAryOp(And, _) => 50,
+        BinOp(Until | Since, _, _) => 52,
+        UnaryOp(Next | Previously, _) => 54,
         BinOp(Equals | NotEquals, _, _) => 60,
         UnaryOp(Not, _) => 70,
         UnaryOp(Prime, _) => 80,
@@ -34,7 +36,7 @@ fn parens(add_parens: bool, s: String) -> String {
 }
 
 fn right_associative(op: &BinOp) -> bool {
-    matches!(op, BinOp::Implies)
+    matches!(op, BinOp::Implies | BinOp::Since | BinOp::Until)
 }
 
 fn left_associative(_op: &BinOp) -> bool {
@@ -65,6 +67,8 @@ pub fn term(t: &Term) -> String {
                 UOp::Prime => format!("{arg}'"),
                 UOp::Always => format!("always {arg}"),
                 UOp::Eventually => format!("eventually {arg}"),
+                UOp::Next => format!("X {arg}"),
+                UOp::Previously => format!("X^-1 {arg}"),
             }
         }
         Term::BinOp(op, arg1, arg2) => {
@@ -79,6 +83,8 @@ pub fn term(t: &Term) -> String {
                 BinOp::NotEquals => "!=",
                 BinOp::Implies => "->",
                 BinOp::Iff => "<->",
+                BinOp::Until => "until",
+                BinOp::Since => "since",
             };
             format!("{left} {op} {right}")
         }
@@ -162,6 +168,12 @@ mod tests {
         assert_eq!(parse(&term(&e)), e);
 
         insta::assert_display_snapshot!(reprint("forall x:t1, y:t2. f(x, y)"), @"forall x:t1, y:t2. f(x, y)");
+
+        insta::assert_display_snapshot!(reprint("eventually X p until X q"), @"eventually X p until X q");
+        insta::assert_display_snapshot!(reprint("eventually (X p) until (X q)"), @"eventually X p until X q");
+
+        insta::assert_display_snapshot!(reprint("p until q since always r"), @"p until q since (always r)");
+        insta::assert_display_snapshot!(reprint("p until (q since (always r))"), @"p until q since (always r)");
     }
 
     #[test]
@@ -178,6 +190,9 @@ mod tests {
         insta::assert_display_snapshot!(
           reprint("(always a)' & eventually (c=d)'"),
            @"(always a)' & (eventually (c = d)')");
+
+        let s = "(p until q) since (always r)";
+        assert_eq!(parse_term(s), parse_term(&reprint(s)));
     }
 }
 

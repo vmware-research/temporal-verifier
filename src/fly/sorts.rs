@@ -198,7 +198,10 @@ fn sort_of_term(context: &Context, term: &Term) -> Result<Sort, SortError> {
             }
             None => Err(SortError::UnknownName(f.clone())),
         },
-        Term::UnaryOp(UOp::Not | UOp::Always | UOp::Eventually, x) => {
+        Term::UnaryOp(
+            UOp::Not | UOp::Always | UOp::Eventually | UOp::Next | UOp::Previously,
+            x,
+        ) => {
             sort_eq(&Sort::Bool, &sort_of_term(context, x)?)?;
             Ok(Sort::Bool)
         }
@@ -209,7 +212,7 @@ fn sort_of_term(context: &Context, term: &Term) -> Result<Sort, SortError> {
             sort_eq(&a, &b)?;
             Ok(Sort::Bool)
         }
-        Term::BinOp(BinOp::Implies | BinOp::Iff, x, y) => {
+        Term::BinOp(BinOp::Implies | BinOp::Iff | BinOp::Until | BinOp::Since, x, y) => {
             sort_eq(&Sort::Bool, &sort_of_term(context, x)?)?;
             sort_eq(&Sort::Bool, &sort_of_term(context, y)?)?;
             Ok(Sort::Bool)
