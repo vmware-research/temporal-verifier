@@ -40,7 +40,6 @@ pub struct Binder {
     pub sort: Sort,
 }
 
-// ODED: maybe Term should be Copy? (see test_eval in semantics.rs)
 #[derive(PartialEq, Eq, Clone, Debug, Hash)]
 pub enum Term {
     Literal(bool),
