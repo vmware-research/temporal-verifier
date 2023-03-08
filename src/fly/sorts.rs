@@ -27,6 +27,9 @@ pub enum SortError {
     Uncalled(String),
     #[error("{0} was called but didn't take any args")]
     Uncallable(String),
+
+    #[error("sort for {0} unknown; unsorted function types not currrently supported")]
+    UnknownFunction(String),
 }
 
 // entry point for the sort checker
@@ -42,7 +45,6 @@ pub fn check(module: &Module) -> Result<(), (SortError, Option<Span>)> {
         let mut context = Context {
             sorts,
             names: im::HashMap::new(),
-            var_id: 0,
             vars: UnificationTable::new(),
         };
 
@@ -53,7 +55,7 @@ pub fn check(module: &Module) -> Result<(), (SortError, Option<Span>)> {
             context.check_sort_exists(&rel.sort, false)?;
             context.add_name(
                 rel.name.clone(),
-                (rel.args.clone(), rel.sort.clone()),
+                AbstractSort::Known(rel.args.clone(), rel.sort.clone()),
                 false,
             )?;
         }
@@ -72,7 +74,11 @@ pub fn check(module: &Module) -> Result<(), (SortError, Option<Span>)> {
                 .iter()
                 .map(|binder| binder.sort.clone())
                 .collect();
-            context.add_name(def.name.clone(), (args, def.ret_sort.clone()), false)?;
+            context.add_name(
+                def.name.clone(),
+                AbstractSort::Known(args, def.ret_sort.clone()),
+                false,
+            )?;
         }
 
         Ok(context)
@@ -116,14 +122,18 @@ pub fn check(module: &Module) -> Result<(), (SortError, Option<Span>)> {
     Ok(())
 }
 
-// will be changed to an enum when inference is added
-type AbstractSort = (Vec<Sort>, Sort);
+#[derive(Clone, Debug)]
+enum AbstractSort {
+    Known(Vec<Sort>, Sort),
+    Unknown(SortVar),
+}
 
 #[inline]
 fn unit(sort: Sort) -> AbstractSort {
-    (vec![], sort)
+    AbstractSort::Known(vec![], sort)
 }
 
+// wrappers to implement ena::unify traits on
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 struct SortVar(u32);
 #[derive(Clone, Debug, PartialEq)]
@@ -158,7 +168,6 @@ impl UnifyValue for OptionSort {
 struct Context {
     sorts: HashSet<String>, // never changed
     names: im::HashMap<String, AbstractSort>,
-    var_id: u32,
     vars: UnificationTable<InPlace<SortVar>>,
 }
 
@@ -198,26 +207,33 @@ impl Context {
                 return Err(SortError::RedefinedName(binder.name.clone()));
             }
             self.check_sort_exists(&binder.sort, true)?;
-            if binder.sort == Sort::Id("".to_owned()) {
-                todo!("handle empty sorts");
+            let sort = if binder.sort == Sort::Id("".to_owned()) {
+                AbstractSort::Unknown(self.vars.new_key(OptionSort(None)))
             } else {
-                self.add_name(binder.name.clone(), unit(binder.sort.clone()), true)?;
-            }
+                unit(binder.sort.clone())
+            };
+            self.add_name(binder.name.clone(), sort, true)?;
         }
         Ok(())
     }
 
     // unify two types, or return an error if they can't be unified
-    fn sort_eq(&mut self, (xs, a): &AbstractSort, (ys, b): &AbstractSort) -> Result<(), SortError> {
-        for (x, y) in xs.iter().zip(ys) {
-            if x != y {
-                return Err(SortError::NotEqual(x.clone(), y.clone()));
+    fn sort_eq(&mut self, a: &AbstractSort, b: &AbstractSort) -> Result<(), SortError> {
+        match (a, b) {
+            (AbstractSort::Known(xs, a), AbstractSort::Known(ys, b)) => {
+                for (x, y) in xs.iter().zip(ys) {
+                    if x != y {
+                        return Err(SortError::NotEqual(x.clone(), y.clone()));
+                    }
+                }
+                if a != b {
+                    return Err(SortError::NotEqual(a.clone(), b.clone()));
+                }
+                Ok(())
             }
+            (AbstractSort::Unknown(i), AbstractSort::Unknown(j)) => self.vars.unify_var_var(*i, *j),
+            (_, _) => todo!(),
         }
-        if a != b {
-            return Err(SortError::NotEqual(a.clone(), b.clone()));
-        }
-        Ok(())
     }
 }
 
@@ -226,13 +242,17 @@ fn sort_of_term(context: &mut Context, term: &Term) -> Result<AbstractSort, Sort
     match term {
         Term::Literal(_) => Ok(unit(Sort::Bool)),
         Term::Id(name) => match context.names.get(name) {
-            Some(sort @ (args, _)) if args.is_empty() => Ok(sort.clone()),
-            Some((_, _)) => Err(SortError::Uncalled(name.clone())),
+            Some(AbstractSort::Known(args, _)) if !args.is_empty() => {
+                Err(SortError::Uncalled(name.clone()))
+            }
+            Some(sort) => Ok(sort.clone()),
             None => Err(SortError::UnknownName(name.clone())),
         },
         Term::App(f, _p, xs) => match context.names.get(f).cloned() {
-            Some((args, _)) if args.is_empty() => Err(SortError::Uncallable(f.clone())),
-            Some((args, ret)) => {
+            Some(AbstractSort::Known(args, _)) if args.is_empty() => {
+                Err(SortError::Uncallable(f.clone()))
+            }
+            Some(AbstractSort::Known(args, ret)) => {
                 if args.len() != xs.len() {
                     return Err(SortError::ArgMismatch(args.len(), xs.len()));
                 }
@@ -242,6 +262,7 @@ fn sort_of_term(context: &mut Context, term: &Term) -> Result<AbstractSort, Sort
                 }
                 Ok(unit(ret))
             }
+            Some(AbstractSort::Unknown(_)) => Err(SortError::UnknownFunction(f.clone())),
             None => Err(SortError::UnknownName(f.clone())),
         },
         Term::UnaryOp(UOp::Not | UOp::Always | UOp::Eventually, x) => {
