@@ -124,7 +124,7 @@ type AbstractSort = (Vec<Sort>, Sort);
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 struct SortVar(u32);
 #[derive(Clone, Debug, PartialEq)]
-struct OptionSort(Option<AbstractSort>);
+struct OptionSort(Option<Sort>);
 
 impl UnifyKey for SortVar {
     type Value = OptionSort;
@@ -145,24 +145,8 @@ impl UnifyValue for OptionSort {
         match (&a.0, &b.0) {
             (None, None) => Ok(OptionSort(None)),
             (None, a @ Some(_)) | (a @ Some(_), None) => Ok(OptionSort(a.clone())),
-            (Some((xs, p)), Some((ys, q))) => {
-                if xs.len() != ys.len() {
-                    return Err(SortError::ArgMismatch(
-                        "unification".to_owned(),
-                        xs.len(),
-                        ys.len(),
-                    ));
-                }
-                for (x, y) in xs.iter().zip(ys) {
-                    if x != y {
-                        return Err(SortError::NotEqual(x.clone(), y.clone()));
-                    }
-                }
-                if p != q {
-                    return Err(SortError::NotEqual(p.clone(), q.clone()));
-                }
-                Ok(OptionSort(Some((xs.clone(), p.clone()))))
-            }
+            (Some(x), Some(y)) if x != y => Err(SortError::NotEqual(x.clone(), y.clone())),
+            (Some(x), Some(_)) => Ok(OptionSort(Some(x.clone()))),
         }
     }
 }
