@@ -64,7 +64,7 @@ pub fn check(module: &Module) -> Result<(), (SortError, Option<Span>)> {
                 context.add_binders(&def.binders)?;
                 context.check_sort_exists(&def.ret_sort, false)?;
                 let ret = sort_of_term(&mut context, &def.body)?;
-                context.sort_eq(&ret, &(vec![], def.ret_sort.clone()))?;
+                context.sort_eq(&ret, &unit(def.ret_sort.clone()))?;
             }
 
             let args = def
@@ -86,7 +86,7 @@ pub fn check(module: &Module) -> Result<(), (SortError, Option<Span>)> {
     for statement in &module.statements {
         match statement {
             ThmStmt::Assume(term) => match sort_of_term(&mut context, term) {
-                Ok(sort) => match context.sort_eq(&(vec![], Sort::Bool), &sort) {
+                Ok(sort) => match context.sort_eq(&unit(Sort::Bool), &sort) {
                     Ok(()) => {}
                     Err(e) => return Err((e, None)),
                 },
@@ -95,7 +95,7 @@ pub fn check(module: &Module) -> Result<(), (SortError, Option<Span>)> {
             ThmStmt::Assert(proof) => {
                 for invariant in &proof.invariants {
                     match sort_of_term(&mut context, &invariant.x) {
-                        Ok(sort) => match context.sort_eq(&(vec![], Sort::Bool), &sort) {
+                        Ok(sort) => match context.sort_eq(&unit(Sort::Bool), &sort) {
                             Ok(()) => {}
                             Err(e) => return Err((e, Some(invariant.span))),
                         },
@@ -103,7 +103,7 @@ pub fn check(module: &Module) -> Result<(), (SortError, Option<Span>)> {
                     }
                 }
                 match sort_of_term(&mut context, &proof.assert.x) {
-                    Ok(sort) => match context.sort_eq(&(vec![], Sort::Bool), &sort) {
+                    Ok(sort) => match context.sort_eq(&unit(Sort::Bool), &sort) {
                         Ok(()) => {}
                         Err(e) => return Err((e, Some(proof.assert.span))),
                     },
@@ -118,6 +118,11 @@ pub fn check(module: &Module) -> Result<(), (SortError, Option<Span>)> {
 
 // will be changed to an enum when inference is added
 type AbstractSort = (Vec<Sort>, Sort);
+
+#[inline]
+fn unit(sort: Sort) -> AbstractSort {
+    (vec![], sort)
+}
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 struct SortVar(u32);
@@ -196,7 +201,7 @@ impl Context {
             if binder.sort == Sort::Id("".to_owned()) {
                 todo!("handle empty sorts");
             } else {
-                self.add_name(binder.name.clone(), (vec![], binder.sort.clone()), true)?;
+                self.add_name(binder.name.clone(), unit(binder.sort.clone()), true)?;
             }
         }
         Ok(())
@@ -219,7 +224,7 @@ impl Context {
 // recursively finds the sort of a term
 fn sort_of_term(context: &mut Context, term: &Term) -> Result<AbstractSort, SortError> {
     match term {
-        Term::Literal(_) => Ok((vec![], Sort::Bool)),
+        Term::Literal(_) => Ok(unit(Sort::Bool)),
         Term::Id(name) => match context.names.get(name) {
             Some(sort @ (args, _)) if args.is_empty() => Ok(sort.clone()),
             Some((_, _)) => Err(SortError::Uncalled(name.clone())),
@@ -233,41 +238,41 @@ fn sort_of_term(context: &mut Context, term: &Term) -> Result<AbstractSort, Sort
                 }
                 for (arg, x) in args.into_iter().zip(xs) {
                     let x = sort_of_term(context, x)?;
-                    context.sort_eq(&(vec![], arg), &x)?;
+                    context.sort_eq(&unit(arg), &x)?;
                 }
-                Ok((vec![], ret))
+                Ok(unit(ret))
             }
             None => Err(SortError::UnknownName(f.clone())),
         },
         Term::UnaryOp(UOp::Not | UOp::Always | UOp::Eventually, x) => {
             let x = sort_of_term(context, x)?;
-            context.sort_eq(&(vec![], Sort::Bool), &x)?;
-            Ok((vec![], Sort::Bool))
+            context.sort_eq(&unit(Sort::Bool), &x)?;
+            Ok(unit(Sort::Bool))
         }
         Term::UnaryOp(UOp::Prime, x) => sort_of_term(context, x),
         Term::BinOp(BinOp::Equals | BinOp::NotEquals, x, y) => {
             let a = sort_of_term(context, x)?;
             let b = sort_of_term(context, y)?;
             context.sort_eq(&a, &b)?;
-            Ok((vec![], Sort::Bool))
+            Ok(unit(Sort::Bool))
         }
         Term::BinOp(BinOp::Implies | BinOp::Iff, x, y) => {
             let x = sort_of_term(context, x)?;
-            context.sort_eq(&(vec![], Sort::Bool), &x)?;
+            context.sort_eq(&unit(Sort::Bool), &x)?;
             let y = sort_of_term(context, y)?;
-            context.sort_eq(&(vec![], Sort::Bool), &y)?;
-            Ok((vec![], Sort::Bool))
+            context.sort_eq(&unit(Sort::Bool), &y)?;
+            Ok(unit(Sort::Bool))
         }
         Term::NAryOp(NOp::And | NOp::Or, xs) => {
             for x in xs {
                 let sort = sort_of_term(context, x)?;
-                context.sort_eq(&(vec![], Sort::Bool), &sort)?;
+                context.sort_eq(&unit(Sort::Bool), &sort)?;
             }
-            Ok((vec![], Sort::Bool))
+            Ok(unit(Sort::Bool))
         }
         Term::Ite { cond, then, else_ } => {
             let cond = sort_of_term(context, cond)?;
-            context.sort_eq(&(vec![], Sort::Bool), &cond)?;
+            context.sort_eq(&unit(Sort::Bool), &cond)?;
             let a = sort_of_term(context, then)?;
             let b = sort_of_term(context, else_)?;
             context.sort_eq(&a, &b)?;
@@ -281,8 +286,8 @@ fn sort_of_term(context: &mut Context, term: &Term) -> Result<AbstractSort, Sort
             let mut context = context.clone();
             context.add_binders(binders)?;
             let body = sort_of_term(&mut context, body)?;
-            context.sort_eq(&(vec![], Sort::Bool), &body)?;
-            Ok((vec![], Sort::Bool))
+            context.sort_eq(&unit(Sort::Bool), &body)?;
+            Ok(unit(Sort::Bool))
         }
     }
 }
