@@ -5,6 +5,11 @@ expression: combined_stdout_stderr
 ---
 
 ======== STDERR: ===========
-thread 'main' panicked at 'not yet implemented: replace binder sorts', src/fly/sorts.rs:330:45
-note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+sort checking error:
+error: could not solve for the sort of x
+  ┌─ tests/examples/fail/sorts/sort_inference_error.fly:6:1
+  │
+6 │ assert forall x. x = x
+  │ ^^^^^^^^^^^^^^^^^^^^^^
+
 

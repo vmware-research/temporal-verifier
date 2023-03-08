@@ -30,6 +30,8 @@ pub enum SortError {
 
     #[error("function sort inference is not currrently supported")]
     UnknownFunctionSort,
+    #[error("could not solve for the sort of {0}")]
+    UnsolvedSort(String),
 }
 
 // entry point for the sort checker
@@ -327,7 +329,16 @@ impl Context<'_> {
                         let s: Vec<&str> = s.split_whitespace().collect();
                         match s[..] {
                             [_] => {}
-                            ["var", _id] => todo!("replace binder sorts"),
+                            ["var", id] => {
+                                let id = id.parse::<u32>().unwrap();
+                                let sort = self.vars.probe_value(SortVar(id));
+                                match sort.0 {
+                                    None => {
+                                        return Err(SortError::UnsolvedSort(binder.name.clone()))
+                                    }
+                                    Some(v) => binder.sort = v,
+                                }
+                            }
                             _ => unreachable!(),
                         }
                     }
