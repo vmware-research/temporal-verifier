@@ -27,9 +27,6 @@ pub enum SortError {
     Uncalled(String),
     #[error("{0} was called but didn't take any args")]
     Uncallable(String),
-
-    #[error("sort inference isn't supported yet")]
-    NoInference,
 }
 
 // entry point for the sort checker
@@ -50,9 +47,9 @@ pub fn check(module: &Module) -> Result<(), (SortError, Option<Span>)> {
 
         for rel in &module.signature.relations {
             for arg in &rel.args {
-                context.check_sort_exists(arg)?;
+                context.check_sort_exists(arg, false)?;
             }
-            context.check_sort_exists(&rel.sort)?;
+            context.check_sort_exists(&rel.sort, false)?;
             context.add_name(
                 rel.name.clone(),
                 (rel.args.clone(), rel.sort.clone()),
@@ -64,7 +61,7 @@ pub fn check(module: &Module) -> Result<(), (SortError, Option<Span>)> {
             {
                 let mut context = context.clone();
                 context.add_binders(&def.binders)?;
-                context.check_sort_exists(&def.ret_sort)?;
+                context.check_sort_exists(&def.ret_sort, false)?;
                 let ret: Sort = sort_of_term(&mut context, &def.body)?;
                 context.sort_eq(&ret, &def.ret_sort)?;
             }
@@ -155,16 +152,17 @@ impl UnifyValue for OptionSort {
 struct Context {
     sorts: HashSet<String>, // never changed
     names: im::HashMap<String, AbstractSort>,
+    var_id: u32,
     vars: UnificationTable<InPlace<SortVar>>,
 }
 
 impl Context {
     // all sorts must be declared in the module signature
     // this function checks that, assuming that it gets called on all sorts
-    fn check_sort_exists(&self, sort: &Sort) -> Result<(), SortError> {
+    fn check_sort_exists(&self, sort: &Sort, empty_valid: bool) -> Result<(), SortError> {
         match sort {
             Sort::Bool => Ok(()),
-            Sort::Id(a) if a.is_empty() => Err(SortError::NoInference),
+            Sort::Id(a) if a.is_empty() && empty_valid => Ok(()),
             Sort::Id(a) => match self.sorts.contains(a) {
                 true => Ok(()),
                 false => Err(SortError::UnknownSort(a.clone())),
@@ -193,8 +191,12 @@ impl Context {
             if !names.insert(binder.name.clone()) {
                 return Err(SortError::RedefinedName(binder.name.clone()));
             }
-            self.check_sort_exists(&binder.sort)?;
-            self.add_name(binder.name.clone(), (vec![], binder.sort.clone()), true)?;
+            self.check_sort_exists(&binder.sort, true)?;
+            if binder.sort == Sort::Id("".to_owned()) {
+                todo!("handle empty sorts");
+            } else {
+                self.add_name(binder.name.clone(), (vec![], binder.sort.clone()), true)?;
+            }
         }
         Ok(())
     }
