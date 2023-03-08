@@ -34,20 +34,21 @@ pub enum SortError {
 
 // entry point for the sort checker
 pub fn check(module: &mut Module) -> Result<(), (SortError, Option<Span>)> {
-    let build_context = || {
-        let mut sorts = HashSet::new();
-        for sort in &module.signature.sorts {
-            if !sorts.insert(sort.clone()) {
-                return Err(SortError::RedefinedSort(sort.clone()));
-            }
+    let mut sorts = HashSet::new();
+    for sort in &module.signature.sorts {
+        if !sorts.insert(sort.clone()) {
+            return Err((SortError::RedefinedSort(sort.clone()), None));
         }
+    }
+    let mut vars = UnificationTable::new();
 
-        let mut context = Context {
-            sorts,
-            names: im::HashMap::new(),
-            vars: UnificationTable::new(),
-        };
+    let mut context = Context {
+        sorts: &sorts,
+        names: im::HashMap::new(),
+        vars: &mut vars,
+    };
 
+    let mut build_context = || {
         for rel in &module.signature.relations {
             for arg in &rel.args {
                 context.check_sort_exists(arg, false)?;
@@ -60,12 +61,12 @@ pub fn check(module: &mut Module) -> Result<(), (SortError, Option<Span>)> {
             )?;
         }
 
-        for def in &module.defs {
+        for def in &mut module.defs {
             {
                 let mut context = context.clone();
                 context.add_binders(&def.binders)?;
                 context.check_sort_exists(&def.ret_sort, false)?;
-                let ret = sort_of_term(&mut context, &def.body)?;
+                let ret = sort_of_term(&mut context, &mut def.body)?;
                 context.sort_eq(&ret, &unit(def.ret_sort.clone()))?;
             }
 
@@ -81,15 +82,15 @@ pub fn check(module: &mut Module) -> Result<(), (SortError, Option<Span>)> {
             )?;
         }
 
-        Ok(context)
+        Ok(())
     };
 
-    let mut context = match build_context() {
+    match build_context() {
         Ok(context) => context,
         Err(e) => return Err((e, None)),
     };
 
-    for statement in &module.statements {
+    for statement in &mut module.statements {
         match statement {
             ThmStmt::Assume(term) => match sort_of_term(&mut context, term) {
                 Ok(sort) => match context.sort_eq(&unit(Sort::Bool), &sort) {
@@ -99,8 +100,8 @@ pub fn check(module: &mut Module) -> Result<(), (SortError, Option<Span>)> {
                 Err(e) => return Err((e, None)),
             },
             ThmStmt::Assert(proof) => {
-                for invariant in &proof.invariants {
-                    match sort_of_term(&mut context, &invariant.x) {
+                for invariant in &mut proof.invariants {
+                    match sort_of_term(&mut context, &mut invariant.x) {
                         Ok(sort) => match context.sort_eq(&unit(Sort::Bool), &sort) {
                             Ok(()) => {}
                             Err(e) => return Err((e, Some(invariant.span))),
@@ -108,7 +109,7 @@ pub fn check(module: &mut Module) -> Result<(), (SortError, Option<Span>)> {
                         Err(e) => return Err((e, Some(invariant.span))),
                     }
                 }
-                match sort_of_term(&mut context, &proof.assert.x) {
+                match sort_of_term(&mut context, &mut proof.assert.x) {
                     Ok(sort) => match context.sort_eq(&unit(Sort::Bool), &sort) {
                         Ok(()) => {}
                         Err(e) => return Err((e, Some(proof.assert.span))),
@@ -164,14 +165,22 @@ impl UnifyValue for OptionSort {
     }
 }
 
-#[derive(Clone, Debug)]
-struct Context {
-    sorts: HashSet<String>, // never changed
+#[derive(Debug)]
+struct Context<'a> {
+    sorts: &'a HashSet<String>, // never changed
     names: im::HashMap<String, AbstractSort>,
-    vars: UnificationTable<InPlace<SortVar>>,
+    vars: &'a mut UnificationTable<InPlace<SortVar>>,
 }
 
-impl Context {
+impl Context<'_> {
+    fn clone(&mut self) -> Context {
+        Context {
+            sorts: self.sorts,
+            names: self.names.clone(),
+            vars: self.vars,
+        }
+    }
+
     // all sorts must be declared in the module signature
     // this function checks that, assuming that it gets called on all sorts
     fn check_sort_exists(&self, sort: &Sort, empty_valid: bool) -> Result<(), SortError> {
@@ -247,7 +256,7 @@ impl Context {
 }
 
 // recursively finds the sort of a term
-fn sort_of_term(context: &mut Context, term: &Term) -> Result<AbstractSort, SortError> {
+fn sort_of_term(context: &mut Context, term: &mut Term) -> Result<AbstractSort, SortError> {
     match term {
         Term::Literal(_) => Ok(unit(Sort::Bool)),
         Term::Id(name) => match context.names.get(name) {
