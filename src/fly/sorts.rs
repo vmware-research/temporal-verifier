@@ -28,8 +28,8 @@ pub enum SortError {
     #[error("{0} was called but didn't take any args")]
     Uncallable(String),
 
-    #[error("sort for {0} unknown; unsorted function types not currrently supported")]
-    UnknownFunction(String),
+    #[error("function sort inference is not currrently supported")]
+    UnknownFunctionSort,
 }
 
 // entry point for the sort checker
@@ -232,7 +232,16 @@ impl Context {
                 Ok(())
             }
             (AbstractSort::Unknown(i), AbstractSort::Unknown(j)) => self.vars.unify_var_var(*i, *j),
-            (_, _) => todo!(),
+            (AbstractSort::Known(xs, y), AbstractSort::Unknown(i))
+            | (AbstractSort::Unknown(i), AbstractSort::Known(xs, y))
+                if xs.is_empty() =>
+            {
+                self.vars.unify_var_value(*i, OptionSort(Some(y.clone())))
+            }
+            (AbstractSort::Known(..), AbstractSort::Unknown(..))
+            | (AbstractSort::Unknown(..), AbstractSort::Known(..)) => {
+                Err(SortError::UnknownFunctionSort)
+            }
         }
     }
 }
@@ -262,7 +271,7 @@ fn sort_of_term(context: &mut Context, term: &Term) -> Result<AbstractSort, Sort
                 }
                 Ok(unit(ret))
             }
-            Some(AbstractSort::Unknown(_)) => Err(SortError::UnknownFunction(f.clone())),
+            Some(AbstractSort::Unknown(_)) => Err(SortError::UnknownFunctionSort),
             None => Err(SortError::UnknownName(f.clone())),
         },
         Term::UnaryOp(UOp::Not | UOp::Always | UOp::Eventually, x) => {
