@@ -120,6 +120,38 @@ pub fn check(module: &mut Module) -> Result<(), (SortError, Option<Span>)> {
         }
     }
 
+    // first pass done
+    // at this point, unknown sorts are written as "var [id]"
+    // the second pass here fixes this
+
+    for def in &mut module.defs {
+        match context.fix_sorts_in_term(&mut def.body) {
+            Ok(()) => {}
+            Err(e) => return Err((e, None)),
+        }
+    }
+
+    for statement in &mut module.statements {
+        match statement {
+            ThmStmt::Assume(term) => match context.fix_sorts_in_term(term) {
+                Ok(()) => {}
+                Err(e) => return Err((e, None)),
+            },
+            ThmStmt::Assert(proof) => {
+                for invariant in &mut proof.invariants {
+                    match context.fix_sorts_in_term(&mut invariant.x) {
+                        Ok(()) => {}
+                        Err(e) => return Err((e, Some(invariant.span))),
+                    }
+                }
+                match context.fix_sorts_in_term(&mut proof.assert.x) {
+                    Ok(()) => {}
+                    Err(e) => return Err((e, Some(proof.assert.span))),
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -252,6 +284,55 @@ impl Context<'_> {
             (AbstractSort::Known(..), AbstractSort::Unknown(..))
             | (AbstractSort::Unknown(..), AbstractSort::Known(..)) => {
                 Err(SortError::UnknownFunctionSort)
+            }
+        }
+    }
+
+    fn fix_sorts_in_term(&mut self, term: &mut Term) -> Result<(), SortError> {
+        match term {
+            Term::Literal(_) | Term::Id(_) => Ok(()),
+            Term::App(_f, _p, xs) => {
+                for x in xs {
+                    self.fix_sorts_in_term(x)?;
+                }
+                Ok(())
+            }
+            Term::UnaryOp(UOp::Not | UOp::Always | UOp::Eventually | UOp::Prime, x) => {
+                self.fix_sorts_in_term(x)
+            }
+            Term::BinOp(BinOp::Equals | BinOp::NotEquals | BinOp::Implies | BinOp::Iff, x, y) => {
+                self.fix_sorts_in_term(x)?;
+                self.fix_sorts_in_term(y)?;
+                Ok(())
+            }
+            Term::NAryOp(NOp::And | NOp::Or, xs) => {
+                for x in xs {
+                    self.fix_sorts_in_term(x)?;
+                }
+                Ok(())
+            }
+            Term::Ite { cond, then, else_ } => {
+                self.fix_sorts_in_term(cond)?;
+                self.fix_sorts_in_term(then)?;
+                self.fix_sorts_in_term(else_)?;
+                Ok(())
+            }
+            Term::Quantified {
+                quantifier: Quantifier::Forall | Quantifier::Exists,
+                binders,
+                body,
+            } => {
+                for binder in binders {
+                    if let Sort::Id(s) = binder.sort.clone() {
+                        let s: Vec<&str> = s.split_whitespace().collect();
+                        match s[..] {
+                            [_] => {}
+                            ["var", _id] => todo!("replace binder sorts"),
+                            _ => unreachable!(),
+                        }
+                    }
+                }
+                self.fix_sorts_in_term(body)
             }
         }
     }
