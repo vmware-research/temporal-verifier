@@ -5,11 +5,6 @@ expression: combined_stdout_stderr
 ---
 
 ======== STDERR: ===========
-sort checking error:
-error: sort inference isn't supported yet
-  ┌─ tests/examples/fail/sorts/sort_inference_error.fly:6:1
-  │
-6 │ assert forall x. x = x
-  │ ^^^^^^^^^^^^^^^^^^^^^^
-
+thread 'main' panicked at 'not yet implemented: handle empty sorts', src/fly/sorts.rs:197:17
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 
