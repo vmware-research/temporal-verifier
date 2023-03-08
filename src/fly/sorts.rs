@@ -33,7 +33,7 @@ pub enum SortError {
 }
 
 // entry point for the sort checker
-pub fn check(module: &Module) -> Result<(), (SortError, Option<Span>)> {
+pub fn check(module: &mut Module) -> Result<(), (SortError, Option<Span>)> {
     let build_context = || {
         let mut sorts = HashSet::new();
         for sort in &module.signature.sorts {

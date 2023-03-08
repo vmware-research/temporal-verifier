@@ -179,7 +179,7 @@ impl App {
             ..Default::default()
         };
 
-        let m = match fly::parse(&file) {
+        let mut m = match fly::parse(&file) {
             Ok(v) => v,
             Err(err) => {
                 let diagnostic = parse_error_diagonistic((), &err);
@@ -188,7 +188,7 @@ impl App {
             }
         };
 
-        let r = sorts::check(&m);
+        let r = sorts::check(&mut m);
         if let Err((err, span)) = r {
             eprintln!("sort checking error:");
 
