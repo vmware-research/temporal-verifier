@@ -64,7 +64,7 @@ pub fn check(module: &mut Module) -> Result<(), (SortError, Option<Span>)> {
         for def in &mut module.defs {
             {
                 let mut context = context.clone();
-                context.add_binders(&def.binders)?;
+                context.add_binders(&mut def.binders)?;
                 context.check_sort_exists(&def.ret_sort, false)?;
                 let ret = sort_of_term(&mut context, &mut def.body)?;
                 context.sort_eq(&ret, &unit(def.ret_sort.clone()))?;
@@ -209,7 +209,7 @@ impl Context<'_> {
 
     // doesn't allow `binders` to shadow each other, but does allow them to
     // shadow names already in `context`
-    fn add_binders(&mut self, binders: &[Binder]) -> Result<(), SortError> {
+    fn add_binders(&mut self, binders: &mut [Binder]) -> Result<(), SortError> {
         let mut names = HashSet::new();
         for binder in binders {
             if !names.insert(binder.name.clone()) {
@@ -217,7 +217,9 @@ impl Context<'_> {
             }
             self.check_sort_exists(&binder.sort, true)?;
             let sort = if binder.sort == Sort::Id("".to_owned()) {
-                AbstractSort::Unknown(self.vars.new_key(OptionSort(None)))
+                let var = self.vars.new_key(OptionSort(None));
+                binder.sort = Sort::Id(format!("var {}", var.0));
+                AbstractSort::Unknown(var)
             } else {
                 unit(binder.sort.clone())
             };
