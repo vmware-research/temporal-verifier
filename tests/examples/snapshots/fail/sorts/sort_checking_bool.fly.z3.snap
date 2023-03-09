@@ -6,7 +6,7 @@ expression: combined_stdout_stderr
 
 ======== STDERR: ===========
 sort checking error:
-error: expected bool but found s
+error: could not unify bool and s
   ┌─ tests/examples/fail/sorts/sort_checking_bool.fly:6:1
   │
 6 │ assert forall x:s. x & true

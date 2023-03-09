@@ -18,10 +18,10 @@ pub enum SortError {
     #[error("{0} was declared multiple times")]
     RedefinedName(String),
 
-    #[error("expected {0} but found {1}")]
+    #[error("could not unify {0} and {1}")]
     NotEqual(Sort, Sort),
-    #[error("expected {0} args but found {1} args")]
-    ArgMismatch(usize, usize),
+    #[error("expected {expected} args but found {found} args")]
+    ArgMismatch { expected: usize, found: usize },
 
     #[error("{0} expected args but didn't get them")]
     Uncalled(String),
@@ -353,7 +353,10 @@ impl Context<'_> {
                 }
                 Some(AbstractSort::Known(args, ret)) => {
                     if args.len() != xs.len() {
-                        return Err(SortError::ArgMismatch(args.len(), xs.len()));
+                        return Err(SortError::ArgMismatch {
+                            expected: args.len(),
+                            found: xs.len(),
+                        });
                     }
                     for (arg, x) in args.into_iter().zip(xs) {
                         let x = self.sort_of_term(x)?;

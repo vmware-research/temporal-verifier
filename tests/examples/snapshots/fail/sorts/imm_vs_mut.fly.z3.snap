@@ -6,6 +6,6 @@ expression: combined_stdout_stderr
 
 ======== STDERR: ===========
 sort checking error:
-error: expected s but found bool
+error: could not unify s and bool
 
 
