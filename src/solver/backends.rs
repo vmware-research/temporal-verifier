@@ -127,11 +127,11 @@ impl Backend for &GenericBackend {
                 .iter()
                 .map(|sort| sort_cardinality(&universe, sort))
                 .collect::<Vec<usize>>();
-            
-            shape.push(sort_cardinality(&universe, &rel.sort));
+
+            shape.push(sort_cardinality(&universe, ret_sort));
             let interp = Interpretation::new(&shape, |args: &[Element]| -> Element {
                 // get the arguments as terms, based on model.universes
-                let args = zip(args, &rel.args)
+                let args = zip(args, &arg_sorts)
                     .map(|(&e_idx, sort)| match sort {
                         Sort::Bool => {
                             if e_idx == 0 {
@@ -153,7 +153,7 @@ impl Backend for &GenericBackend {
                     .smt_eval(&repl, &part_interp, body)
                     .unwrap_or_else(|err| panic!("could not interpret {symbol}: {err}"));
                 let res = e.s().expect("unhandled evaluation result");
-                match &rel.sort {
+                match &ret_sort {
                     Sort::Bool => {
                         if res == "false" {
                             return 0;

@@ -89,7 +89,6 @@ pub fn check(module: &mut Module) -> Result<(), (SortError, Option<Span>)> {
     };
 
     match build_context() {
-
         Ok(context) => context,
         Err(e) => return Err((e, None)),
     };
@@ -98,7 +97,6 @@ pub fn check(module: &mut Module) -> Result<(), (SortError, Option<Span>)> {
         match statement {
             ThmStmt::Assume(term) => match context.sort_of_term(term) {
                 Ok(sort) => match context.sort_eq(&AbstractSort::unit(Sort::Bool), &sort) {
-
                     Ok(()) => {}
                     Err(e) => return Err((e, None)),
                 },
