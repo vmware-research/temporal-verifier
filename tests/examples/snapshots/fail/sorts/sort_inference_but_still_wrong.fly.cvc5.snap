@@ -1,0 +1,17 @@
+---
+source: tests/test_examples.rs
+description: "--expect-fail --all-solvers -- verify tests/examples/fail/sorts/sort_inference_but_still_wrong.fly"
+expression: combined_stdout_stderr
+---
+
+======== STDERR: ===========
+verification errors:
+error: assertion failure
+  ┌─ tests/examples/fail/sorts/sort_inference_but_still_wrong.fly:7:1
+  │
+7 │ assert exists x:s. forall y. x = y
+  │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  │
+  = counter example:
+
+

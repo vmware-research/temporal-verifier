@@ -1,0 +1,7 @@
+# Copyright 2022-2023 VMware, Inc.
+# SPDX-License-Identifier: BSD-2-Clause
+
+sort s
+
+assume exists x:s, y:s. x != y
+assert exists x:s. forall y. x = y
