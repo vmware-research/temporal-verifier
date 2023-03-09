@@ -4,6 +4,7 @@
 use std::{
     collections::{HashMap, HashSet},
     iter::zip,
+    time::Instant,
 };
 
 use crate::{
@@ -13,12 +14,13 @@ use crate::{
     },
     smtlib::{
         proc::{CvcConf, SolverCmd, Z3Conf},
-        sexp::{self, atom_s},
+        sexp::{self, Atom},
     },
+    solver::models::ModelSymbol,
 };
 
 use super::{
-    models::{self, subst},
+    models::{self, PartialInterp},
     {Backend, FOModel},
 };
 
@@ -97,22 +99,35 @@ impl Backend for &GenericBackend {
             .map(|(sort, elements)| (sort.clone(), elements.len()))
             .collect();
 
-        let mut interps = HashMap::new();
-        for (symbol, (binders, body)) in &model.symbols {
+        let mut part_interp = PartialInterp::for_model(&model);
+        let mut symbols = model.symbols.iter().collect::<Vec<_>>();
+        symbols.sort_unstable_by_key(|(symbol, _)| {
+            let in_signature = sig.contains_name(symbol);
+            // sort the model-only signatures first
+            //
+            // NOTE: this is just a heuristic to evaluate auxilliary functions
+            // first, for now.
+            (in_signature, symbol.to_string())
+        });
+        for (symbol, model_sym) in symbols.into_iter() {
             if indicators.contains(symbol) {
                 continue;
             }
-            let symbol_no_primes = symbol.trim_end_matches(|c| c == '\'');
-            // this symbol is not in the signature
-            if !sig.relations.iter().any(|r| r.name == symbol_no_primes) {
-                continue;
-            }
-            let rel = sig.relation_decl(symbol);
-            let mut shape = rel
-                .args
+            let start = Instant::now();
+            let ModelSymbol {
+                binders,
+                body,
+                ret_sort,
+            } = model_sym;
+            let arg_sorts = binders
+                .iter()
+                .map(|(_, sort)| sort.clone())
+                .collect::<Vec<_>>();
+            let mut shape = arg_sorts
                 .iter()
                 .map(|sort| sort_cardinality(&universe, sort))
                 .collect::<Vec<usize>>();
+            
             shape.push(sort_cardinality(&universe, &rel.sort));
             let interp = Interpretation::new(&shape, |args: &[Element]| -> Element {
                 // get the arguments as terms, based on model.universes
@@ -120,23 +135,23 @@ impl Backend for &GenericBackend {
                     .map(|(&e_idx, sort)| match sort {
                         Sort::Bool => {
                             if e_idx == 0 {
-                                atom_s("false")
+                                Atom::S("false".to_string())
                             } else {
-                                atom_s("true")
+                                Atom::S("true".to_string())
                             }
                         }
                         Sort::Id(sort) => {
                             let elements = &model.universes[sort];
                             let element = elements[e_idx].clone();
-                            atom_s(element)
+                            Atom::S(element)
                         }
                     })
                     .collect::<Vec<_>>();
-                let repl = zip(binders.iter().map(|s| s.as_str()), args).collect::<Vec<_>>();
-                let body = subst(&repl, body);
+                let repl: HashMap<&str, Atom> =
+                    zip(binders.iter().map(|s| s.0.as_str()), args).collect();
                 let e = model
-                    .smt_eval(&body)
-                    .unwrap_or_else(|err| panic!("could not interpret {}: {err}", &rel.name));
+                    .smt_eval(&repl, &part_interp, body)
+                    .unwrap_or_else(|err| panic!("could not interpret {symbol}: {err}"));
                 let res = e.s().expect("unhandled evaluation result");
                 match &rel.sort {
                     Sort::Bool => {
@@ -158,13 +173,22 @@ impl Backend for &GenericBackend {
                     }
                 }
             });
-            interps.insert(symbol.clone(), interp);
+            part_interp
+                .interps
+                .insert(symbol.clone(), (interp, ret_sort.clone()));
+            log::debug!(
+                "evaluated {symbol} in {:.1}s",
+                Instant::now().duration_since(start).as_secs_f64()
+            )
         }
 
-        FOModel {
-            universe,
-            interp: interps,
-        }
+        let interp = part_interp
+            .interps
+            .into_iter()
+            .filter(|(symbol, _)| sig.contains_name(symbol))
+            .map(|(symbol, (interp, _))| (symbol, interp))
+            .collect();
+        FOModel { universe, interp }
     }
 }
 
@@ -176,9 +200,11 @@ mod tests {
 
     use super::{Backend, GenericBackend, SolverType};
 
+    use test_log::test;
+
     #[test]
-    #[ignore] // parsing this model takes too long
     fn test_issue_5_parse_model_with_auxilliary_defs() {
+        let _ = pretty_env_logger::try_init();
         let sig = parser::parse_signature(
             r#"
         sort node
@@ -217,5 +243,29 @@ mod tests {
         assert!(fo_model.interp.contains_key("leader'"));
         // auxilliary definition in Z3's model
         assert!(!fo_model.interp.contains_key("k!1058"));
+    }
+
+    #[test]
+    fn test_parse_test_model() {
+        let _ = pretty_env_logger::try_init();
+        let sig = parser::parse_signature(
+            r#"
+        sort node
+        mutable votes(node, node): bool
+        "#
+            .trim(),
+        );
+
+        let backend = GenericBackend {
+            solver_type: SolverType::Z3,
+            bin: "z3".to_string(),
+        };
+
+        let model_text =
+            fs::read_to_string("tests/test_model.sexp").expect("could not find model file");
+        let model_sexp = sexp::parse(&model_text).expect("test model does not parse");
+
+        let fo_model = (&backend).parse(&sig, 0, &HashSet::new(), &model_sexp);
+        assert!(fo_model.interp.contains_key("votes"));
     }
 }

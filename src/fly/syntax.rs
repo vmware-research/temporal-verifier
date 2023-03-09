@@ -217,6 +217,11 @@ impl Signature {
             .unwrap_or_else(|| panic!("invalid relation {name}"))
     }
 
+    pub fn contains_name(&self, name: &str) -> bool {
+        let symbol_no_primes = name.trim_end_matches(|c| c == '\'');
+        return self.relations.iter().any(|r| r.name == symbol_no_primes);
+    }
+
     /// Compute all terms up to a certain nesting depth (optional), using the given variable names.
     /// If include_eq is true, include equality terms between any two same-sorted, non-Bool terms.
     ///

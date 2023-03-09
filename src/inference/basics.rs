@@ -127,7 +127,7 @@ impl FOModule {
                     return Some(states.into_iter().collect_tuple().unwrap());
                 }
                 SatResp::Unsat => (),
-                SatResp::Unknown(_) => panic!(),
+                SatResp::Unknown(reason) => panic!("sat solver returned unknown: {reason}"),
             }
         }
 

@@ -107,7 +107,7 @@ impl Z3Conf {
         cmd.args(["-in", "-smt2"]);
         cmd.option("model.completion", "true");
         let mut conf = Self(cmd);
-        conf.timeout_ms(10000);
+        conf.timeout_ms(20000);
         conf
     }
 

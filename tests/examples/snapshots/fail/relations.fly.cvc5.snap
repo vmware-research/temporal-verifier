@@ -13,12 +13,12 @@ error: assertion failure
    │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    │
    = counter example:
-     p(@A_0) = true
-     p(@A_1) = false
+     p(@A_0) = false
+     p(@A_1) = true
      q(@A_0,@A_0) = true
      q(@A_0,@A_1) = true
      q(@A_1,@A_0) = true
      q(@A_1,@A_1) = true
-     a0 = @A_0
+     a0 = @A_1
 
 
