@@ -20,8 +20,8 @@ pub enum SortError {
 
     #[error("could not unify {0} and {1}")]
     NotEqual(Sort, Sort),
-    #[error("expected {expected} args but found {found} args")]
-    ArgMismatch { expected: usize, found: usize },
+    #[error("could not unify {0} args and {1} args")]
+    NotEqualArgs(usize, usize),
 
     #[error("{0} expected args but didn't get them")]
     Uncalled(String),
@@ -253,6 +253,9 @@ impl Context<'_> {
     fn sort_eq(&mut self, a: &AbstractSort, b: &AbstractSort) -> Result<(), SortError> {
         match (a, b) {
             (AbstractSort::Known(xs, a), AbstractSort::Known(ys, b)) => {
+                if xs.len() != ys.len() {
+                    return Err(SortError::NotEqualArgs(xs.len(), ys.len()));
+                }
                 for (x, y) in xs.iter().zip(ys) {
                     if x != y {
                         return Err(SortError::NotEqual(x.clone(), y.clone()));
@@ -353,10 +356,7 @@ impl Context<'_> {
                 }
                 Some(AbstractSort::Known(args, ret)) => {
                     if args.len() != xs.len() {
-                        return Err(SortError::ArgMismatch {
-                            expected: args.len(),
-                            found: xs.len(),
-                        });
+                        return Err(SortError::NotEqualArgs(args.len(), xs.len()));
                     }
                     for (arg, x) in args.into_iter().zip(xs) {
                         let x = self.sort_of_term(x)?;
