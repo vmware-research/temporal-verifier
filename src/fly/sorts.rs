@@ -28,14 +28,16 @@ pub enum SortError {
     #[error("{0} was called but didn't take any args")]
     Uncallable(String),
 
-    #[error("function sort inference is not currrently supported")]
+    #[error("function sort inference is not currently supported")]
     UnknownFunctionSort,
     #[error("could not solve for the sort of {0}")]
     UnsolvedSort(String),
 }
 
-// entry point for the sort checker
-pub fn check(module: &mut Module) -> Result<(), (SortError, Option<Span>)> {
+// checks that the program is well-sorted
+// as well as modifying the module by filling in any missing sort annotations on binders
+// entry point for this module
+pub fn sort_check_and_infer(module: &mut Module) -> Result<(), (SortError, Option<Span>)> {
     let mut sorts = HashSet::new();
     for sort in &module.signature.sorts {
         if !sorts.insert(sort.clone()) {
@@ -50,48 +52,53 @@ pub fn check(module: &mut Module) -> Result<(), (SortError, Option<Span>)> {
         vars: &mut vars,
     };
 
-    let mut build_context = || {
-        for rel in &module.signature.relations {
-            for arg in &rel.args {
-                context.check_sort_exists(arg, false)?;
-            }
-            context.check_sort_exists(&rel.sort, false)?;
-            context.add_name(
+    for rel in &module.signature.relations {
+        for arg in &rel.args {
+            context
+                .check_sort_exists(arg, false)
+                .map_err(|e| (e, None))?;
+        }
+        context
+            .check_sort_exists(&rel.sort, false)
+            .map_err(|e| (e, None))?;
+        context
+            .add_name(
                 rel.name.clone(),
                 AbstractSort::Known(rel.args.clone(), rel.sort.clone()),
                 false,
-            )?;
+            )
+            .map_err(|e| (e, None))?;
+    }
+
+    for def in &mut module.defs {
+        {
+            let mut context = context.clone();
+            context
+                .add_binders(&mut def.binders)
+                .map_err(|e| (e, None))?;
+            context
+                .check_sort_exists(&def.ret_sort, false)
+                .map_err(|e| (e, None))?;
+            let ret = context.sort_of_term(&mut def.body).map_err(|e| (e, None))?;
+            context
+                .sort_eq(&ret, &AbstractSort::unit(def.ret_sort.clone()))
+                .map_err(|e| (e, None))?;
         }
 
-        for def in &mut module.defs {
-            {
-                let mut context = context.clone();
-                context.add_binders(&mut def.binders)?;
-                context.check_sort_exists(&def.ret_sort, false)?;
-                let ret = context.sort_of_term(&mut def.body)?;
-                context.sort_eq(&ret, &AbstractSort::unit(def.ret_sort.clone()))?;
-            }
+        let args = def
+            .binders
+            .iter()
+            .map(|binder| binder.sort.clone())
+            .collect();
 
-            let args = def
-                .binders
-                .iter()
-                .map(|binder| binder.sort.clone())
-                .collect();
-
-            context.add_name(
+        context
+            .add_name(
                 def.name.clone(),
                 AbstractSort::Known(args, def.ret_sort.clone()),
                 false,
-            )?;
-        }
-
-        Ok(())
-    };
-
-    match build_context() {
-        Ok(context) => context,
-        Err(e) => return Err((e, None)),
-    };
+            )
+            .map_err(|e| (e, None))?;
+    }
 
     for statement in &mut module.statements {
         match statement {
@@ -104,21 +111,19 @@ pub fn check(module: &mut Module) -> Result<(), (SortError, Option<Span>)> {
             },
             ThmStmt::Assert(proof) => {
                 for invariant in &mut proof.invariants {
-                    match context.sort_of_term(&mut invariant.x) {
-                        Ok(sort) => match context.sort_eq(&AbstractSort::unit(Sort::Bool), &sort) {
-                            Ok(()) => {}
-                            Err(e) => return Err((e, Some(invariant.span))),
-                        },
-                        Err(e) => return Err((e, Some(invariant.span))),
-                    }
+                    let sort = context
+                        .sort_of_term(&mut invariant.x)
+                        .map_err(|e| (e, Some(invariant.span)))?;
+                    context
+                        .sort_eq(&AbstractSort::unit(Sort::Bool), &sort)
+                        .map_err(|e| (e, Some(invariant.span)))?;
                 }
-                match context.sort_of_term(&mut proof.assert.x) {
-                    Ok(sort) => match context.sort_eq(&AbstractSort::unit(Sort::Bool), &sort) {
-                        Ok(()) => {}
-                        Err(e) => return Err((e, Some(proof.assert.span))),
-                    },
-                    Err(e) => return Err((e, Some(proof.assert.span))),
-                }
+                let sort = context
+                    .sort_of_term(&mut proof.assert.x)
+                    .map_err(|e| (e, Some(proof.assert.span)))?;
+                context
+                    .sort_eq(&AbstractSort::unit(Sort::Bool), &sort)
+                    .map_err(|e| (e, Some(proof.assert.span)))?;
             }
         }
     }
@@ -128,29 +133,23 @@ pub fn check(module: &mut Module) -> Result<(), (SortError, Option<Span>)> {
     // the second pass here fixes this
 
     for def in &mut module.defs {
-        match context.fix_sorts_in_term(&mut def.body) {
-            Ok(()) => {}
-            Err(e) => return Err((e, None)),
-        }
+        context
+            .fix_sorts_in_term(&mut def.body)
+            .map_err(|e| (e, None))?;
     }
 
     for statement in &mut module.statements {
         match statement {
-            ThmStmt::Assume(term) => match context.fix_sorts_in_term(term) {
-                Ok(()) => {}
-                Err(e) => return Err((e, None)),
-            },
+            ThmStmt::Assume(term) => context.fix_sorts_in_term(term).map_err(|e| (e, None))?,
             ThmStmt::Assert(proof) => {
                 for invariant in &mut proof.invariants {
-                    match context.fix_sorts_in_term(&mut invariant.x) {
-                        Ok(()) => {}
-                        Err(e) => return Err((e, Some(invariant.span))),
-                    }
+                    context
+                        .fix_sorts_in_term(&mut invariant.x)
+                        .map_err(|e| (e, Some(invariant.span)))?;
                 }
-                match context.fix_sorts_in_term(&mut proof.assert.x) {
-                    Ok(()) => {}
-                    Err(e) => return Err((e, Some(proof.assert.span))),
-                }
+                context
+                    .fix_sorts_in_term(&mut proof.assert.x)
+                    .map_err(|e| (e, Some(proof.assert.span)))?;
             }
         }
     }
