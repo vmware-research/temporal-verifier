@@ -30,8 +30,6 @@ pub enum SortError {
     #[error("{0} was called but didn't take any args")]
     Uncallable(String),
 
-    #[error("function sort inference is not currently supported")]
-    UnknownFunctionSort,
     #[error("could not solve for the sort of {0}")]
     UnsolvedSort(String),
 }
@@ -321,7 +319,7 @@ impl Context<'_> {
                         match s[..] {
                             [_] => {}
                             ["var", id] => {
-                                let id = id.parse::<u32>().unwrap();
+                                let id = id.parse::<u32>().expect("how the user get a space here?");
                                 let sort = self.vars.probe_value(SortVar(id));
                                 match sort.0 {
                                     None => {
@@ -330,7 +328,7 @@ impl Context<'_> {
                                     Some(v) => binder.sort = v,
                                 }
                             }
-                            _ => unreachable!(),
+                            _ => unreachable!("empty string, or contains spaces without var"),
                         }
                     }
                 }
@@ -368,7 +366,7 @@ impl Context<'_> {
                     }
                     Ok(AbstractSort::Known(ret))
                 }
-                Some(NamedSort::Unknown(_)) => Err(SortError::UnknownFunctionSort),
+                Some(NamedSort::Unknown(_)) => unreachable!("function sorts are always known"),
                 None => Err(SortError::UnknownName(f.clone())),
             },
             Term::UnaryOp(UOp::Not | UOp::Always | UOp::Eventually, x) => {
