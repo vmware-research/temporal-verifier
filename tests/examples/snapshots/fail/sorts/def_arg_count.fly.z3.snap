@@ -6,7 +6,7 @@ expression: combined_stdout_stderr
 
 ======== STDERR: ===========
 sort checking error:
-error: could not unify 2 args and 1 args
+error: expected 2 args but found 1 args
    ┌─ tests/examples/fail/sorts/def_arg_count.fly:10:1
    │
 10 │ assert forall x:s, y:s. f(x)
