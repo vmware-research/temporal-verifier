@@ -67,7 +67,7 @@ pub fn sort_check_and_infer(module: &mut Module) -> Result<(), (SortError, Optio
 
         for def in &mut module.defs {
             {
-                let mut context = context.clone();
+                let mut context = context.new_inner_scope();
                 context.add_binders(&mut def.binders)?;
                 context.check_sort_exists(&def.ret_sort, false)?;
                 let ret = context.sort_of_term(&mut def.body)?;
@@ -193,8 +193,7 @@ struct Context<'a> {
 
 impl Context<'_> {
     // we don't want to clone the references, just the name map
-    // this should be both fast and correct (with regards to scope)
-    fn clone(&mut self) -> Context {
+    fn new_inner_scope(&mut self) -> Context {
         Context {
             sorts: self.sorts,
             names: self.names.clone(),
@@ -408,7 +407,7 @@ impl Context<'_> {
                 binders,
                 body,
             } => {
-                let mut context = self.clone();
+                let mut context = self.new_inner_scope();
                 context.add_binders(binders)?;
                 let body = context.sort_of_term(body)?;
                 context.unify_var_value(&Sort::Bool, &body)?;
