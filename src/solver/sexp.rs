@@ -45,7 +45,7 @@ fn term_primes(t: &Term, num_primes: usize) -> Sexp {
                     term_primes(arg, num_primes + 1)
                 }
                 // TODO: temporal stuff should be eliminated before here
-                UOp::Always | UOp::Eventually => {
+                UOp::Always | UOp::Eventually | UOp::Next | UOp::Previously => {
                     panic!("attempt to encode a temporal formula for smt")
                 }
             }
@@ -57,6 +57,9 @@ fn term_primes(t: &Term, num_primes: usize) -> Sexp {
                 BinOp::NotEquals => app("distinct", args),
                 BinOp::Implies => app("=>", args),
                 BinOp::Iff => app("=", args),
+                BinOp::Until | BinOp::Since => {
+                    panic!("attempt to encode a temporal formula for smt")
+                }
             }
         }
         Term::NAryOp(op, args) => {

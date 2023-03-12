@@ -57,6 +57,14 @@ grammar parser() for str {
         --
         x:(@) _ "&" _ y:@ { Term::nary(And, x, y) }
         --
+        // NOTE(tej): precedence of these operators was an arbitrary choice
+        x:@ _ "until" _ y:(@) { Term::BinOp(BinOp::Until, Box::new(x), Box::new(y)) }
+        x:@ _ "since" _ y:(@) { Term::BinOp(BinOp::Since, Box::new(x), Box::new(y)) }
+        --
+        // NOTE(tej): precedence of these operators was an arbitrary choice
+        "X" __ x:@ { Term::UnaryOp(UOp::Next, Box::new(x)) }
+        "X^-1" __ x:@ { Term::UnaryOp(UOp::Previously, Box::new(x)) }
+        --
         x:(@) _ "=" _ y:@ { Term::BinOp(Equals, Box::new(x), Box::new(y)) }
         x:(@) _ "!=" _ y:@ { Term::BinOp(NotEquals, Box::new(x), Box::new(y)) }
         --
@@ -222,6 +230,24 @@ mod tests {
         assert_eq!(
             term("always p'=(p|q) & q'=q").unwrap(),
             term("always (p'=(p|q) & ((q')=q))").unwrap()
+        );
+
+        assert_eq!(
+            term("always ((X p) until q)").unwrap(),
+            term("always X p until q").unwrap(),
+        );
+
+        assert_eq!(
+            term("p until q since r").unwrap(),
+            term("p until (q since r)").unwrap(),
+        );
+    }
+
+    #[test]
+    fn test_term_associativity() {
+        assert_ne!(
+            term("(p until q) since r").unwrap(),
+            term("p until q since r").unwrap(),
         );
     }
 
