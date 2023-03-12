@@ -126,18 +126,16 @@ impl Model {
         model
     }
 
-    // ODED: I would change this function signature to:
-    // fn fmt_element(sort: &Sort, element: Element) -> String
-    fn fmt_sort(sort: &Sort, idx: usize) -> String {
+    fn fmt_element(sort: &Sort, element: Element) -> String {
         match sort {
             Sort::Bool => {
-                if idx == 0 {
+                if element == 0 {
                     "false".to_string()
                 } else {
                     "true".to_string()
                 }
             }
-            Sort::Id(s) => format!("@{s}_{idx}"),
+            Sort::Id(s) => format!("@{s}_{element}"),
         }
     }
 
@@ -156,14 +154,14 @@ impl Model {
         for args in args_list {
             let name = &decl.name;
             let args_s = zip(&decl.args, args.iter())
-                .map(|(typ, &idx)| Self::fmt_sort(typ, idx))
+                .map(|(typ, &idx)| Self::fmt_element(typ, idx))
                 .collect::<Vec<_>>();
             let args_s = if args_s.is_empty() {
                 "".to_string()
             } else {
                 format!("({})", args_s.join(","))
             };
-            let ret_s = Self::fmt_sort(&decl.sort, interp.get(&args));
+            let ret_s = Self::fmt_element(&decl.sort, interp.get(&args));
             lines.push(format!("{name}{args_s} = {ret_s}"));
         }
         lines.join("\n")
@@ -271,19 +269,18 @@ impl Model {
                 assert!(!binders.is_empty());
                 let shape: Vec<usize> = binders.iter().map(|b| self.cardinality(&b.sort)).collect();
                 let names: Vec<&String> = binders.iter().map(|b| &b.name).collect();
-                let mut assignment_ = assignment.cloned().unwrap_or_default();
+                // evaluate on all combinations of values for quantified sorts
                 let mut iter = shape
                     .iter()
                     .map(|&card| (0..card).collect::<Vec<Element>>())
                     .multi_cartesian_product()
                     .map(|elements| {
+                        // extend assignment with all variables bound to these `elements`
+                        let mut assignment = assignment.cloned().unwrap_or_default();
                         for (name, element) in zip(&names, elements) {
-                            // ODED: does this make sense? updating the
-                            // assignment inside the lambda? and the
-                            // name.to_string()?
-                            assignment_.insert(name.to_string(), element);
+                            assignment.insert(name.to_string(), element);
                         }
-                        self.eval(body, Some(&assignment_)) == 1
+                        self.eval(body, Some(&assignment)) == 1
                     });
                 let result = match quantifier {
                     Forall => iter.all(|x| x),
