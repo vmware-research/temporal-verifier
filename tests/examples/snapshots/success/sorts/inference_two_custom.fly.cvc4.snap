@@ -1,0 +1,9 @@
+---
+source: tests/test_examples.rs
+description: "--all-solvers -- verify tests/examples/success/sorts/inference_two_custom.fly"
+expression: combined_stdout_stderr
+---
+verifies!
+
+======== STDERR: ===========
+

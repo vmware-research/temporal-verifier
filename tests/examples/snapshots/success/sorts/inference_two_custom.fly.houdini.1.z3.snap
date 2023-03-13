@@ -1,0 +1,9 @@
+---
+source: tests/test_examples.rs
+description: "--all-solvers --name=houdini.1 -- infer --houdini tests/examples/success/sorts/inference_two_custom.fly"
+expression: combined_stdout_stderr
+---
+verifies!
+
+======== STDERR: ===========
+

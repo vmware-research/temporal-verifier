@@ -6,6 +6,6 @@ expression: combined_stdout_stderr
 
 ======== STDERR: ===========
 sort checking error:
-error: expected bool but found s
+error: expected s but found bool
 
 

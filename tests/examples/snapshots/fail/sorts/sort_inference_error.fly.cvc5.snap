@@ -6,7 +6,7 @@ expression: combined_stdout_stderr
 
 ======== STDERR: ===========
 sort checking error:
-error: sort inference isn't supported yet
+error: could not solve for the sort of x
   ┌─ tests/examples/fail/sorts/sort_inference_error.fly:6:1
   │
 6 │ assert forall x. x = x
