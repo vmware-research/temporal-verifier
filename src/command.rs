@@ -7,6 +7,7 @@ use std::{fs, path::PathBuf, process};
 
 use crate::inference::houdini;
 use crate::solver::solver_path;
+use crate::timing;
 use crate::{
     fly::{self, parser::parse_error_diagonistic, printer, sorts},
     inference::run_fixpoint,
@@ -57,6 +58,10 @@ struct VerifyArgs {
     #[command(flatten)]
     solver: SolverArgs,
 
+    #[arg(long)]
+    /// Print timing statistics
+    time: bool,
+
     /// File name for a .fly file
     file: String,
 }
@@ -69,6 +74,10 @@ struct InferArgs {
     #[arg(long)]
     /// Run the Houdini algorithm to infer invariants
     houdini: bool,
+
+    #[arg(long)]
+    /// Print timing statistics
+    time: bool,
 
     #[arg(long)]
     /// Try to extend model traces before looking for CEX in the frame
@@ -208,6 +217,9 @@ impl App {
             Command::Verify(ref args) => {
                 let conf = args.get_solver_conf();
                 let r = verify_module(&conf, &m);
+                if args.time {
+                    timing::report();
+                }
                 match r {
                     Ok(()) => println!("verifies!"),
                     Err(err) => {
@@ -227,6 +239,9 @@ impl App {
                 if houdini {
                     let conf = args.get_solver_conf();
                     let r = houdini::infer_module(&conf, &m);
+                    if args.time {
+                        timing::report();
+                    }
                     match r {
                         Ok(()) => println!("verifies!"),
                         Err(err) => {
@@ -244,6 +259,9 @@ impl App {
                 } else {
                     let conf = Rc::new(args.get_solver_conf());
                     run_fixpoint(conf, &m, args.extend_models, args.disj);
+                    if args.time {
+                        timing::report();
+                    }
                 }
             }
             Command::Inline { .. } => {

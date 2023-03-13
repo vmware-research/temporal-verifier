@@ -9,6 +9,7 @@ mod inference;
 pub mod smtlib;
 pub mod solver;
 mod term;
+pub mod timing;
 mod verify;
 
 #[doc(hidden)]

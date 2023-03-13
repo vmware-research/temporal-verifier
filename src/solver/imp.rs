@@ -4,6 +4,7 @@
 use std::{
     collections::{HashMap, HashSet},
     path::Path,
+    time::Instant,
 };
 
 use crate::{
@@ -16,6 +17,7 @@ use crate::{
         sexp::{app, atom_i, atom_s, sexp_l, Atom, Sexp},
     },
     solver::sexp,
+    timing::{self, TimeType},
 };
 
 /// A [`Solver`] requires a Backend, which specifies how to start a particular
@@ -157,7 +159,8 @@ impl<B: Backend> Solver<B> {
                 );
             }
         }
-        if assumptions.is_empty() {
+        let start = timing::start();
+        let r = if assumptions.is_empty() {
             let sat = self.proc.check_sat()?;
             Ok(sat)
         } else {
@@ -173,14 +176,22 @@ impl<B: Backend> Solver<B> {
                 .collect::<Vec<_>>();
             let sat = self.proc.check_sat_assuming(&assumptions)?;
             Ok(sat)
-        }
+        };
+        timing::elapsed(
+            TimeType::CheckSatCall {
+                sat: matches!(r, Ok(SatResp::Sat)),
+            },
+            start,
+        );
+        r
     }
 
-    fn get_fo_model(&mut self) -> FOModel {
+    fn get_fo_model(&mut self, typ: TimeType, start: Instant) -> FOModel {
         let model = self
             .proc
             .send_with_reply(&app("get-model", []))
             .expect("could not get model");
+        timing::elapsed(typ, start);
         self.backend
             .parse(&self.signature, self.n_states, &self.indicators, &model)
     }
@@ -189,7 +200,8 @@ impl<B: Backend> Solver<B> {
     /// of models, one per state. Each model interprets all of the symbols in
     /// the signature.
     pub fn get_model(&mut self) -> Vec<Model> {
-        let fo_model = self.get_fo_model();
+        let start = timing::start();
+        let fo_model = self.get_fo_model(TimeType::GetModel, start);
         fo_model.into_trace(&self.signature, self.n_states)
     }
 
@@ -318,13 +330,8 @@ impl<B: Backend> Solver<B> {
                     .expect("solver error while minimizing");
             }
         }
-        let model = self.get_fo_model();
-        let trace = model.into_trace(&self.signature, self.n_states);
-        log::debug!(
-            "minimized model to max card {max_card} in {:.1}s",
-            start.elapsed().as_secs_f64(),
-        );
-        trace
+        let model = self.get_fo_model(TimeType::GetMinimalModel, start);
+        model.into_trace(&self.signature, self.n_states)
     }
 
     /// Returns an unsat core as a set of indicator variables (a subset of the
