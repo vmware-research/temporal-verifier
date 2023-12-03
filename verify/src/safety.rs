@@ -14,7 +14,8 @@ use fly::{
 /// A temporal property expressed as an invariant problem.
 #[derive(Debug, Clone)]
 pub struct InvariantAssertion {
-    sig: Signature,
+    /// The signature
+    pub sig: Signature,
     /// The initial states
     pub init: Term,
     /// The states reachable in one step

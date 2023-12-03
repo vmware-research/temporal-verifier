@@ -527,6 +527,10 @@ mod tests {
     #[test]
     #[allow(clippy::redundant_clone)]
     fn test_eval() {
+        // TODO(oded): we should also test evaluation in the presence of
+        // quantifiers that shadow each other, e.g. evaluate:
+        // forall x. exists x. p(x).
+
         let sort = |n: usize| Sort::Uninterpreted(format!("T{n}"));
 
         let sig = Signature {

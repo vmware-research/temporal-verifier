@@ -45,7 +45,8 @@ fn left_associative(_op: &BinOp) -> bool {
     false
 }
 
-fn binder(b: &Binder) -> String {
+/// Pretty-print a binder
+pub fn binder(b: &Binder) -> String {
     format!("{}:{}", b.name, sort(&b.sort))
 }
 

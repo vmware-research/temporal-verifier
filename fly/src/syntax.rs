@@ -41,8 +41,16 @@ impl Sort {
 
 impl From<&str> for Sort {
     /// This is mostly for the Binder smart constructor, making it possible to
-    /// pass either Sort, &Sort, or &str
+    /// pass either Sort, &Sort, &str, or &String
     fn from(value: &str) -> Self {
+        Self::uninterpreted(value)
+    }
+}
+
+impl From<&String> for Sort {
+    /// This is mostly for the Binder smart constructor, making it possible to
+    /// pass either Sort, &Sort, &str, or &String
+    fn from(value: &String) -> Self {
         Self::uninterpreted(value)
     }
 }
