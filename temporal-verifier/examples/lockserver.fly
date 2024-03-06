@@ -3,8 +3,7 @@
 
 # Lock server example, translated from mypyvy
 # TEST --all-solvers -- verify
-# TEST --name infer-z3 -- infer --no-print-invariant qalpha --until-safe --max-exist 0
-# TEST --name infer-cvc5 -- infer --no-print-invariant qalpha --solver cvc5 --until-safe --max-exist 0
+# TEST --name infer-qalpha -- infer --no-print-nondet qalpha --quantifier "F node 2" --clause-size=3 --cubes=0 --strategy=weaken
 
 sort node
 

@@ -4,7 +4,7 @@
 //! The flyvy AST for terms and modules.
 
 use itertools::Itertools;
-use std::fmt;
+use std::{fmt, sync::Arc};
 
 use serde::Serialize;
 
@@ -480,6 +480,48 @@ impl Term {
     }
 }
 
+/// Utilities for getting information about a given [`Term`]
+impl Term {
+    /// Return whether the sort of the term is [`Sort::Bool`] in the given signature.
+    /// Variables are considered non-bool.
+    pub fn is_bool(&self, signature: &Signature) -> bool {
+        match self {
+            Term::Literal(_)
+            | Term::UnaryOp(UOp::Not | UOp::Always | UOp::Eventually, _)
+            | Term::BinOp(_, _, _)
+            | Term::NAryOp(_, _)
+            | Term::Quantified { .. } => true,
+            Term::Id(name) | Term::App(name, _, _) => {
+                signature.contains_relation(name)
+                    && matches!(signature.relation_decl(name).sort, Sort::Bool)
+            }
+            Term::UnaryOp(UOp::Prime | UOp::Next | UOp::Previous, t) => t.is_bool(signature),
+            Term::Ite { then, else_, .. } => {
+                let then_is_bool = then.is_bool(signature);
+                let else_is_bool = else_.is_bool(signature);
+                assert_eq!(then_is_bool, else_is_bool);
+                then_is_bool
+            }
+        }
+    }
+
+    /// Return the number of atomic formulas in the term.
+    pub fn size(&self) -> usize {
+        match self {
+            Term::Literal(_) | Term::Id(_) | Term::App(_, _, _) => 1,
+            Term::UnaryOp(_, t) => t.size(),
+            Term::BinOp(_, t1, t2) => t1.size() + t2.size(),
+            Term::NAryOp(_, ts) => ts.iter().map(Term::size).sum(),
+            Term::Ite { cond, then, else_ } => cond.size() + then.size() + else_.size(),
+            Term::Quantified {
+                quantifier: _,
+                binders: _,
+                body,
+            } => body.size(),
+        }
+    }
+}
+
 /// Leftovers that should be eliminated
 impl Term {
     /// Convenience function to create `!t`
@@ -528,7 +570,7 @@ impl Term {
 // TODO(oded): rename Relation to Function
 
 /// The declaration of a single function as part of a Signature
-#[derive(PartialEq, Eq, Clone, Debug, Serialize)]
+#[derive(PartialEq, Eq, Clone, Debug, Serialize, Hash)]
 pub struct RelationDecl {
     /// If false, the relation is immutable with respect to time
     pub mutable: bool,
@@ -543,7 +585,7 @@ pub struct RelationDecl {
 /// A Signature defines a state space for an LTL Term, consisting of some number
 /// of uninterpreted sorts and declarations for functions using those sorts (or
 /// the built-in boolean sort).
-#[derive(PartialEq, Eq, Clone, Debug, Serialize)]
+#[derive(PartialEq, Eq, Clone, Debug, Serialize, Hash)]
 pub struct Signature {
     /// Names of uninterpreted sorts
     pub sorts: Vec<String>,
@@ -631,9 +673,15 @@ impl Signature {
             }
         }
 
-        // Generate constants.
+        // Indicates whether nullary functions have already been generated.
+        let mut generated_nullary = false;
+
+        // If depth is bounded, this maintains the terms for depth - 1 to be used in equality terms.
+        let mut terms_depth_minus_one: Option<Vec<Vec<Term>>> = None;
+
+        // Generate Boolean nullary relations.
         for rel_decl in &self.relations {
-            if rel_decl.args.is_empty() {
+            if rel_decl.args.is_empty() && matches!(rel_decl.sort, Sort::Bool) {
                 new_terms[sort_idx(&rel_decl.sort)].push(Term::Id(rel_decl.name.clone()));
             }
         }
@@ -645,19 +693,24 @@ impl Signature {
             }
 
             let mut new_new_terms = vec![vec![]; self.sorts.len() + 1];
-            for rel_decl in &self.relations {
+            'rel_loop: for rel_decl in &self.relations {
                 if rel_decl.args.is_empty() {
-                    continue;
+                    match (&rel_decl.sort, generated_nullary) {
+                        (Sort::Bool, _) | (_, true) => (),
+                        _ => new_new_terms[sort_idx(&rel_decl.sort)]
+                            .push(Term::Id(rel_decl.name.clone())),
+                    }
+                    continue 'rel_loop;
                 }
 
-                for new_ind in (0..rel_decl.args.len())
+                'ind_loop: for new_ind in (0..rel_decl.args.len())
                     .map(|_| [false, true])
                     .multi_cartesian_product_fixed()
                 {
                     // Only generate terms where at least one argument is a newly generated term,
                     // to make sure each term is generated exactly once.
                     if !new_ind.iter().any(|&x| x) {
-                        continue;
+                        continue 'ind_loop;
                     }
 
                     let mut arg_terms = vec![];
@@ -686,10 +739,16 @@ impl Signature {
                 }
             }
 
+            generated_nullary = true;
+
             for (i, ts) in new_terms.iter_mut().enumerate() {
                 terms[i].append(ts);
             }
             new_terms = new_new_terms
+        }
+
+        if include_eq && depth.is_some() {
+            terms_depth_minus_one = Some(terms.clone());
         }
 
         for (i, vt) in new_terms.iter_mut().enumerate() {
@@ -698,8 +757,9 @@ impl Signature {
 
         // Generate equality terms.
         if include_eq {
+            let terms_for_eq = terms_depth_minus_one.as_ref().unwrap_or(&terms);
             let mut eq_terms = vec![];
-            for term in terms.iter().take(self.sorts.len()) {
+            for term in terms_for_eq.iter().take(self.sorts.len()) {
                 eq_terms.append(
                     &mut term
                         .iter()
@@ -774,7 +834,7 @@ pub enum ThmStmt {
 #[derive(PartialEq, Eq, Clone, Debug)]
 pub struct Module {
     /// Signature for all terms in the module
-    pub signature: Signature,
+    pub signature: Arc<Signature>,
     /// Helper definitions (essentially macros) that may be used in the module's
     /// statements
     pub defs: Vec<Definition>,
@@ -837,10 +897,16 @@ mod tests {
         let mut terms = sig.terms_by_sort(&sorted_vars, Some(0), true);
         assert_eq!(
             terms,
+            vec![vec![term("a1"), term("a2"),], vec![term("b"),], vec![]]
+        );
+
+        terms = sig.terms_by_sort(&sorted_vars, Some(1), true);
+        assert_eq!(
+            terms,
             vec![
-                vec![term("a1"), term("a2"), term("c1"),],
-                vec![term("b"), term("c2"),],
-                vec![term("a1=a2"), term("a1=c1"), term("a2=c1"), term("b=c2"),]
+                vec![term("a1"), term("a2"), term("c1"), term("f21(b)"),],
+                vec![term("b"), term("c2"), term("f12(a1)"), term("f12(a2)"),],
+                vec![term("r(b, a1)"), term("r(b, a2)"), term("a1=a2"),]
             ]
         );
 
@@ -856,7 +922,6 @@ mod tests {
                     term("f21(c2)"),
                     term("f21(f12(a1))"),
                     term("f21(f12(a2))"),
-                    term("f21(f12(c1))"),
                 ],
                 vec![
                     term("b"),
@@ -865,34 +930,24 @@ mod tests {
                     term("f12(a2)"),
                     term("f12(c1)"),
                     term("f12(f21(b))"),
-                    term("f12(f21(c2))"),
                 ],
                 vec![
                     term("r(b, a1)"),
                     term("r(b, a2)"),
                     term("r(b, c1)"),
+                    term("r(b, f21(b))"),
                     term("r(c2, a1)"),
                     term("r(c2, a2)"),
-                    term("r(c2, c1)"),
-                    term("r(b, f21(b))"),
-                    term("r(b, f21(c2))"),
-                    term("r(c2, f21(b))"),
-                    term("r(c2, f21(c2))"),
                     term("r(f12(a1), a1)"),
                     term("r(f12(a1), a2)"),
-                    term("r(f12(a1), c1)"),
                     term("r(f12(a2), a1)"),
                     term("r(f12(a2), a2)"),
-                    term("r(f12(a2), c1)"),
-                    term("r(f12(c1), a1)"),
-                    term("r(f12(c1), a2)"),
-                    term("r(f12(c1), c1)"),
+                    term("r(c2, c1)"),
+                    term("r(c2, f21(b))"),
+                    term("r(f12(a1), c1)"),
                     term("r(f12(a1), f21(b))"),
-                    term("r(f12(a1), f21(c2))"),
+                    term("r(f12(a2), c1)"),
                     term("r(f12(a2), f21(b))"),
-                    term("r(f12(a2), f21(c2))"),
-                    term("r(f12(c1), f21(b))"),
-                    term("r(f12(c1), f21(c2))"),
                 ]
             ]
         );
@@ -945,12 +1000,12 @@ mod tests {
                     term("r(b, c1)"),
                     term("r(c2, a1)"),
                     term("r(c2, a2)"),
-                    term("r(c2, c1)"),
                     term("r(f12(a1), a1)"),
                     term("r(f12(a1), a2)"),
-                    term("r(f12(a1), c1)"),
                     term("r(f12(a2), a1)"),
                     term("r(f12(a2), a2)"),
+                    term("r(c2, c1)"),
+                    term("r(f12(a1), c1)"),
                     term("r(f12(a2), c1)"),
                     term("r(f12(c1), a1)"),
                     term("r(f12(c1), a2)"),

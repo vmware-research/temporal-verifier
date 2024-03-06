@@ -3,7 +3,11 @@
 
 //! Utility to convert all non-boolean-returning relations in a Module to boolean-returning ones.
 
-use crate::{semantics::*, syntax::*};
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use crate::{semantics::*, syntax::*, term::prime::Next};
+use itertools::Itertools;
 use thiserror::Error;
 
 impl Module {
@@ -21,7 +25,8 @@ impl Module {
             .collect();
 
         let mut axioms = vec![];
-        for relation in &mut self.signature.relations {
+        let mut new_signature = self.signature.as_ref().clone();
+        for relation in &mut new_signature.relations {
             if relation.sort != Sort::Bool {
                 let binders: Vec<Binder> = relation
                     .args
@@ -83,13 +88,19 @@ impl Module {
                 relation.sort = Sort::Bool;
             }
         }
+        self.signature = Arc::new(new_signature);
 
         for statement in &mut self.statements {
             match statement {
-                ThmStmt::Assume(term) => fix_term(term, &changed)?,
+                ThmStmt::Assume(term) => {
+                    *term = flatten_term(&old_signature, term);
+                    fix_term(term, &changed)?
+                }
                 ThmStmt::Assert(Proof { assert, invariants }) => {
+                    assert.x = flatten_term(&old_signature, &assert.x);
                     fix_term(&mut assert.x, &changed)?;
                     for invariant in invariants {
+                        invariant.x = flatten_term(&old_signature, &invariant.x);
                         fix_term(&mut invariant.x, &changed)?;
                     }
                 }
@@ -111,7 +122,7 @@ impl Module {
                             return interp.clone();
                         }
 
-                        let shape = r
+                        let shape: Vec<_> = r
                             .args
                             .iter()
                             .map(|s| model.cardinality(s))
@@ -132,6 +143,83 @@ impl Module {
                     .collect(),
             )
         }))
+    }
+
+    /// Given a model from a module which underwent [`Module::convert_non_bool_relations`],
+    /// convert it to one with the original non-boolean relations.
+    /// It is assumed that the calling [`Module`] (`self`) is a copy of the original, non-converted module.
+    pub fn to_non_bool_model(&self, model: &Model) -> Model {
+        Model::new(
+            &self.signature,
+            &model.universe,
+            self.signature
+                .relations
+                .iter()
+                .map(|r| {
+                    let interp = &model.interp[self.signature.relation_idx(&r.name)];
+                    if r.sort == Sort::Bool {
+                        return interp.clone();
+                    }
+                    assert_eq!(r.args.len(), interp.shape.len() - 2);
+
+                    let shape: Vec<_> = r
+                        .args
+                        .iter()
+                        .map(|s| model.cardinality(s))
+                        .chain([model.cardinality(&r.sort)])
+                        .collect();
+                    let f = |elements: &[Element]| {
+                        for i in 0..model.cardinality(&r.sort) {
+                            let mut elements = elements.to_vec();
+                            elements.push(i);
+                            if interp.get(&elements) == 1 {
+                                return i;
+                            }
+                        }
+                        unreachable!()
+                    };
+                    Interpretation::new(&shape, f)
+                })
+                .collect(),
+        )
+    }
+
+    /// Given a model convert it to one only boolean relations.
+    /// It is assumed that the calling [`Module`] (`self`) is a copy of the module from which the model came,
+    /// but which underwent the `convert_non_bool_relations` operations.
+    pub fn to_bool_model(&self, model: &Model) -> Model {
+        Model::new(
+            &self.signature,
+            &model.universe,
+            self.signature
+                .relations
+                .iter()
+                .map(|r| {
+                    assert_eq!(r.sort, Sort::Bool);
+                    let interp = &model.interp[self.signature.relation_idx(&r.name)];
+                    if r.args.len() == interp.shape.len() - 1 {
+                        return interp.clone();
+                    }
+                    assert_eq!(r.args.len(), interp.shape.len());
+
+                    let shape: Vec<_> = r
+                        .args
+                        .iter()
+                        .map(|s| model.cardinality(s))
+                        .chain([2])
+                        .collect();
+                    let f = |elements: &[Element]| {
+                        let (val, elements) = elements.split_last().unwrap();
+                        if interp.get(elements) == *val {
+                            return 1;
+                        } else {
+                            return 0;
+                        }
+                    };
+                    Interpretation::new(&shape, f)
+                })
+                .collect(),
+        )
     }
 }
 
@@ -172,6 +260,186 @@ pub enum RetsError {
     /// A function was found that wasn't the direct child of an `Equals`.
     #[error("could not remove non-boolean-returning relations from {0}")]
     FoundOutsideEquals(Term),
+}
+
+/// Return the variable associated with the given term if one exists.
+/// Otherwise, return a fresh variable and add its binder to `subterm_vars`.
+fn flat_var_for_term(subterm_vars: &mut HashMap<Term, Binder>, term: Term, sort: Sort) -> Term {
+    if let Some(binder) = subterm_vars.get(&term) {
+        Term::id(&binder.name)
+    } else {
+        let name = format!("__flat_{}", subterm_vars.len());
+        subterm_vars.insert(
+            term,
+            Binder {
+                name: name.clone(),
+                sort,
+            },
+        );
+        Term::Id(name)
+    }
+}
+
+/// Quantify a flattened term using the binders of fresh variables associated with flattened subterms.
+fn quantify_flattened(flat_term: Term, subterm_vars: HashMap<Term, Binder>) -> Term {
+    let (terms, binders): (Vec<_>, Vec<_>) = subterm_vars
+        .into_iter()
+        .sorted_by(|(_, b1), (_, b2)| b1.name.cmp(&b2.name))
+        .unzip();
+    let body = Term::and(
+        terms
+            .into_iter()
+            .enumerate()
+            .map(|(i, t)| Term::equals(Term::id(&binders[i].name), t))
+            .chain([flat_term]),
+    );
+    if binders.is_empty() {
+        body
+    } else {
+        Term::Quantified {
+            quantifier: Quantifier::Exists,
+            binders,
+            body: Box::new(body),
+        }
+    }
+}
+
+/// Get the sort of the given constant. Panics if given anything other then a constant wrapped in temporal operators.
+fn get_const_sort(sig: &Signature, term: &Term) -> Sort {
+    match term {
+        Term::Id(name) => sig.relation_decl(name).sort.clone(),
+        Term::UnaryOp(UOp::Prime | UOp::Next | UOp::Previous, t) => get_const_sort(sig, t),
+        _ => panic!("tried to flatten non-normalized term: {term}"),
+    }
+}
+
+fn is_flat(term: &Term) -> bool {
+    matches!(
+        term,
+        Term::Id(_) | Term::UnaryOp(UOp::Next | UOp::Previous | UOp::Prime, _)
+    )
+}
+
+/// A recursive helper function to get rid of nested functions. `subterm_vars` maintains a mapping
+/// from nested terms to their fresh binders.
+/// The basic transformation replaces a nested (sorted) term `t` is with a fresh variable `__flat_i`
+/// (where `i` is some number) and quantifies the result as `exists __flat_i. (__flat_i = t) & ...`.
+///
+/// More precrisely, this returns the flattened version of the given `term`, and new variables
+/// used in the flattening are added to `subterm_vars` as a mapping from their corresponding terms.
+/// These variables are kept up to the deepest boolean level, where they are quantified accordingly.
+/// If `make_var` is false, the topmost level will not be converted into a fresh variable; this is useful
+/// for equalities, where we need to replace at most one side with a variable.
+fn flatten_term_rec(
+    sig: &Signature,
+    term: &Term,
+    subterm_vars: &mut HashMap<Term, Binder>,
+    make_var: bool,
+) -> Term {
+    match term {
+        // Literals are flat
+        Term::Literal(_) => term.clone(),
+        // A non-boolean constant is replaced with a fresh variable if necessary.
+        Term::Id(s) => match sig.relations.iter().find(|r| &r.name == s) {
+            Some(r) if make_var && matches!(r.sort, Sort::Uninterpreted(_)) => {
+                flat_var_for_term(subterm_vars, term.clone(), r.sort.clone())
+            }
+            _ => term.clone(),
+        },
+        // A boolean function application is flattened, then quantified accordingly.
+        // A non-boolean function application is just flattened, and adds a new variable for itself.
+        Term::App(f, n_primes, args) => {
+            let sort = sig.relation_decl(f).sort.clone();
+            if matches!(sort, Sort::Bool) {
+                let mut new_subterm_vars = HashMap::new();
+                let new_args: Vec<_> = args
+                    .iter()
+                    .map(|arg| flatten_term_rec(sig, arg, &mut new_subterm_vars, true))
+                    .collect();
+                let flat_term = Term::app(f, *n_primes, new_args);
+                quantify_flattened(flat_term, new_subterm_vars)
+            } else {
+                let new_args: Vec<_> = args
+                    .iter()
+                    .map(|arg| flatten_term_rec(sig, arg, subterm_vars, true))
+                    .collect();
+                let new_term = Term::app(f, *n_primes, new_args);
+                if make_var {
+                    flat_var_for_term(subterm_vars, new_term, sort)
+                } else {
+                    new_term
+                }
+            }
+        }
+        // If a unary operation produced a bool, it is flattened recursively.
+        // Otherwise, we assume it is a constant, and make a variable for it depending on `make_var`.
+        Term::UnaryOp(op, t) if term.is_bool(sig) => {
+            Term::UnaryOp(*op, Box::new(flatten_term_rec(sig, t, subterm_vars, false)))
+        }
+        Term::UnaryOp(_, _) if make_var => {
+            flat_var_for_term(subterm_vars, term.clone(), get_const_sort(sig, term))
+        }
+        Term::UnaryOp(_, _) => term.clone(),
+        // Equalities and inequalities are flattened by flattening both sides. Note that at most one of the sides
+        // needs to be replaced with a variable at this level. By default this is the lefthand side, unless
+        // the righthand side is already a variable.
+        Term::BinOp(op, t1, t2) if matches!(op, BinOp::Equals | BinOp::NotEquals) => {
+            let mut new_subterm_vars = HashMap::new();
+            let flat_term = Term::BinOp(
+                *op,
+                Box::new(flatten_term_rec(
+                    sig,
+                    t1,
+                    &mut new_subterm_vars,
+                    !is_flat(t2),
+                )),
+                Box::new(flatten_term_rec(sig, t2, &mut new_subterm_vars, false)),
+            );
+            quantify_flattened(flat_term, new_subterm_vars)
+        }
+        // All other binary operations are flattened recursively.
+        Term::BinOp(op, t1, t2) => Term::BinOp(
+            *op,
+            Box::new(flatten_term_rec(sig, t1, subterm_vars, false)),
+            Box::new(flatten_term_rec(sig, t2, subterm_vars, false)),
+        ),
+        // An n-ary operation is flattened recursively.
+        Term::NAryOp(op, args) => Term::NAryOp(
+            *op,
+            args.iter()
+                .map(|t| flatten_term_rec(sig, t, subterm_vars, false))
+                .collect(),
+        ),
+        // For if-then-else, we only handle boolean terms.
+        Term::Ite { cond, then, else_ } => {
+            assert!(term.is_bool(sig));
+            Term::Ite {
+                cond: Box::new(flatten_term_rec(sig, cond, &mut HashMap::new(), false)),
+                then: Box::new(flatten_term_rec(sig, then, &mut HashMap::new(), false)),
+                else_: Box::new(flatten_term_rec(sig, else_, &mut HashMap::new(), false)),
+            }
+        }
+        // A quantified term is flattened recursively.
+        Term::Quantified {
+            quantifier,
+            binders,
+            body,
+        } => Term::Quantified {
+            quantifier: *quantifier,
+            binders: binders.clone(),
+            body: Box::new(flatten_term_rec(sig, body, subterm_vars, false)),
+        },
+    }
+}
+
+/// Get rid of nested functions in the given term.
+fn flatten_term(sig: &Signature, term: &Term) -> Term {
+    flatten_term_rec(
+        sig,
+        &Next::new(sig).normalize(term),
+        &mut HashMap::new(),
+        false,
+    )
 }
 
 fn fix_term(term: &mut Term, changed: &[RelationDecl]) -> Result<(), RetsError> {
@@ -280,7 +548,7 @@ fn fix_term(term: &mut Term, changed: &[RelationDecl]) -> Result<(), RetsError> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::parse;
+    use crate::parser::{parse, term};
 
     #[test]
     fn non_bool_relations_module_conversion_basic() -> Result<(), RetsError> {
@@ -332,6 +600,10 @@ assume always forall s:s. forall ___1:s. f'(s, ___1) = (___1 = s)
         let mut module1 = parse(source1).unwrap();
         let _ = module1.convert_non_bool_relations()?;
 
+        if let ThmStmt::Assume(t) = &module1.statements[2] {
+            println!("{t}")
+        };
+
         let module2 = parse(source2).unwrap();
 
         assert_eq!(module2, module1);
@@ -379,20 +651,23 @@ mutable f(bool): s
         let model1 = Model::new(
             &module.signature,
             &vec![3],
-            vec![Interpretation::new(&vec![2, 3], |xs| {
-                if xs[0] == 0 {
-                    2
-                } else {
-                    0
-                }
-            })],
+            vec![Interpretation::new(
+                &[2, 3],
+                |xs| {
+                    if xs[0] == 0 {
+                        2
+                    } else {
+                        0
+                    }
+                },
+            )],
         );
 
         let back_convert_model = module.convert_non_bool_relations()?;
         let model2 = Model::new(
             &module.signature,
             &vec![3],
-            vec![Interpretation::new(&vec![2, 3, 2], |xs| match xs {
+            vec![Interpretation::new(&[2, 3, 2], |xs| match xs {
                 [0, 2] | [1, 0] => 1,
                 _ => 0,
             })],
@@ -403,5 +678,76 @@ mutable f(bool): s
         assert_eq!(model1, model3);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_flatten_term() {
+        let sort_name = |i: usize| format!("s{i}");
+        let sort = |i: usize| Sort::Uninterpreted(sort_name(i));
+
+        // Non-boolean constant
+        let c = RelationDecl {
+            mutable: true,
+            name: "c".to_string(),
+            args: vec![],
+            sort: sort(2),
+        };
+        // Non-boolean unary function
+        let t = RelationDecl {
+            mutable: false,
+            name: "t".to_string(),
+            args: vec![sort(2)],
+            sort: sort(1),
+        };
+        // Boolean binary relation
+        let r = RelationDecl {
+            mutable: true,
+            name: "r".to_string(),
+            args: vec![sort(1), sort(2)],
+            sort: Sort::Bool,
+        };
+        // Non-boolean binary function
+        let f = RelationDecl {
+            mutable: false,
+            name: "f".to_string(),
+            args: vec![sort(1), sort(2)],
+            sort: sort(2),
+        };
+
+        let sig = Signature {
+            sorts: vec![sort_name(1), sort_name(2)],
+            relations: vec![c, t, r, f],
+        };
+
+        let terms = [
+            term("r(t(c), c)"),
+            term("exists x: s2. t(x) = f(t(x), x)"),
+            term("forall x: s2. x = f(t(x), c)"),
+            term("forall x: s2. f(t(x), c) != x"),
+            term("forall x: s1. r(x, c)"),
+            term("forall x: s1. !r(x, f(x, c))"),
+            term("forall x: s1. (r(x, c'') | r'(t(c), c))"),
+            term("if (exists x: s1. r(x, c)) then r(t(c), c) else !r(t(c), c)"),
+        ];
+        let flat_terms: Vec<_> = terms.iter().map(|t| flatten_term(&sig, t)).collect();
+        let expected_terms = [
+            term("exists __flat_0: s2, __flat_1: s1. (__flat_0 = c) & (__flat_1 = t(__flat_0)) & r(__flat_1, __flat_0)"),
+            term("exists x: s2. exists __flat_0: s1. (__flat_0 = t(x)) & (__flat_0 = f(__flat_0, x))"),
+            term("forall x: s2. exists __flat_0: s1, __flat_1: s2. (__flat_0 = t(x)) & (__flat_1 = c) & (x = f(__flat_0, __flat_1))"),
+            term("forall x: s2. exists __flat_0: s1, __flat_1: s2. (__flat_0 = t(x)) & (__flat_1 = c) & (f(__flat_0, __flat_1) != x)"),
+            term("forall x: s1. exists __flat_0: s2. (__flat_0 = c) & r(x, __flat_0)"),
+            term("forall x: s1. !(exists __flat_0: s2, __flat_1: s2. (__flat_0 = c) & (__flat_1 = f(x, __flat_0)) & r(x, __flat_1))"),
+            term("forall x: s1. (
+                (exists __flat_0:s2. (__flat_0 = c'') & r(x, __flat_0)) | 
+                (exists __flat_0: s2, __flat_1: s1. (__flat_0 = c) & (__flat_1 = t(__flat_0)) & r'(__flat_1, __flat_0))
+            )"),
+            term("if (exists x: s1. exists __flat_0: s2. (__flat_0 = c) & r(x, __flat_0))
+                    then (exists __flat_0: s2, __flat_1: s1. (__flat_0 = c) & (__flat_1 = t(__flat_0)) & r(__flat_1, __flat_0))
+                    else !(exists __flat_0: s2, __flat_1: s1. (__flat_0 = c) & (__flat_1 = t(__flat_0)) & r(__flat_1, __flat_0))"),
+        ];
+
+        for (flat, expected) in flat_terms.iter().zip(&expected_terms) {
+            assert_eq!(flat, expected);
+        }
     }
 }

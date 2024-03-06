@@ -5,6 +5,7 @@
 
 use bounded::checker::CheckerAnswer;
 use codespan_reporting::diagnostic::{Diagnostic, Label};
+use inference::qalpha::fixpoint::defaults;
 use path_slash::PathExt;
 use solver::basics::SingleSolver;
 use std::collections::HashMap;
@@ -21,12 +22,16 @@ use codespan_reporting::{
     },
 };
 use fly::semantics::models_to_string;
-use fly::syntax::{Signature, Sort};
+use fly::syntax::{Module, Signature, Sort};
 use fly::{self, parser::parse_error_diagnostic, printer, sorts, timing};
-use inference::basics::{parse_quantifier, InferenceConfig, QfBody};
-use inference::fixpoint::{self, qalpha_dynamic};
+use inference::basics::{
+    FOModule, QalphaConfig, QfBody, QuantifierFreeConfig, SimulationConfig, SmtTactic,
+};
 use inference::houdini;
-use inference::quant::QuantifierConfig;
+use inference::qalpha::{
+    fixpoint::{self, qalpha_dynamic, Strategy},
+    quant::{parse_quantifier, QuantifierConfig},
+};
 use inference::updr::Updr;
 use solver::backends;
 use solver::conf::SolverConf;
@@ -82,38 +87,21 @@ struct VerifyArgs {
 
 #[derive(Args, Clone, Debug, PartialEq, Eq)]
 struct QuantifierConfigArgs {
-    #[arg(long)]
-    /// Use a custom prefix, given either by the sort ordering (via `--sort`) or by exact quantifiers (via `--quantifier`).
-    /// Otherwise, use the sort ordering found in the loaded module
-    custom_quant: bool,
-
     #[arg(short, long)]
     /// Sorts in the order they should appear in the quantifier prefix
     sort: Vec<String>,
 
     #[arg(short, long)]
-    /// Quantifiers in the form `<quantifier: F/E/*> <sort> <var1> <var2> ...`
+    /// Quantifiers in the form `<quantifier: F/E/*> <sort> <count>`
     quantifier: Vec<String>,
 }
 
 impl QuantifierConfigArgs {
     fn to_cfg(&self, sig: &Signature) -> QuantifierConfig {
         let mut quantifiers;
-        let mut sorts: Vec<usize>;
+        let mut sorts: Vec<Sort>;
         let mut counts: Vec<usize>;
-        if !self.custom_quant {
-            sorts = (0..sig.sorts.len()).collect();
-            quantifiers = vec![None; sorts.len()];
-            counts = vec![fixpoint::defaults::MAX_SAME_SORT; sorts.len()];
-        } else if !self.sort.is_empty() {
-            sorts = self
-                .sort
-                .iter()
-                .map(|s| sig.sort_idx(&Sort::Uninterpreted(s.clone())))
-                .collect();
-            quantifiers = vec![None; sorts.len()];
-            counts = vec![fixpoint::defaults::MAX_SAME_SORT; sorts.len()];
-        } else {
+        if !self.quantifier.is_empty() {
             quantifiers = vec![];
             sorts = vec![];
             counts = vec![];
@@ -122,64 +110,42 @@ impl QuantifierConfigArgs {
                 match r {
                     Ok((q, sort, count)) => {
                         quantifiers.push(q);
-                        sorts.push(sig.sort_idx(&sort));
+                        sorts.push(sort);
                         counts.push(count);
                     }
                     Err(err) => panic!("{err}"),
                 }
             }
+        } else if !self.sort.is_empty() {
+            sorts = self
+                .sort
+                .iter()
+                .map(|s| Sort::Uninterpreted(s.clone()))
+                .collect();
+            quantifiers = vec![None; sorts.len()];
+            counts = vec![fixpoint::defaults::QUANT_SAME_SORT; sorts.len()];
+        } else {
+            sorts = sig.sorts.iter().map(|s| Sort::uninterpreted(s)).collect();
+            quantifiers = vec![None; sorts.len()];
+            counts = vec![fixpoint::defaults::QUANT_SAME_SORT; sorts.len()];
         }
         QuantifierConfig::new(Arc::new(sig.clone()), quantifiers, sorts, &counts)
     }
 }
 
 #[derive(Args, Clone, Debug, PartialEq, Eq)]
-struct InferenceConfigArgs {
-    #[command(flatten)]
-    q_cfg_args: QuantifierConfigArgs,
+struct QuantifierFreeConfigArgs {
+    #[arg(long)]
+    /// Defines the type of quantifier-free body (cnf/dnf/pdnf)
+    qf: Option<String>,
 
     #[arg(long)]
-    /// Instead on parallizing the solvers for each query, try them one by one
-    /// in a sequential fallback fashion.
-    fallback: bool,
-
-    #[arg(long)]
-    /// Defines the type of quantifier-free body (cnf/pdnf/pdnf-naive)
-    qf_body: Option<String>,
-
-    #[arg(long)]
-    /// Do not search gradually for the quantified serach space needed to find an invariant,
-    /// and instead begin with the maximal domain matching the specification.
-    no_search: bool,
-
-    #[arg(long)]
-    /// Defines the maximal size of the quantifier prefix
-    max_size: Option<usize>,
-
-    #[arg(long)]
-    /// Defines the maximal number of existential quantifiers
-    max_exist: Option<usize>,
-
-    #[arg(long)]
-    /// For a quantifier-free body in CNF, determines the maximal number of clauses
-    clauses: Option<usize>,
-
-    #[arg(long)]
-    /// For a quantifier-free body in CNF, determines the maximal size of each clause
+    /// Determines the maximal size of each clause
     clause_size: Option<usize>,
 
     #[arg(long)]
-    /// For a quantifier-free body in DNF, determines the maximal number of cubes
+    /// Determines the maximal number of cubes in disjunction
     cubes: Option<usize>,
-
-    #[arg(long)]
-    /// For a quantifier-free body in DNF, determines the maximal size of each cube
-    cube_size: Option<usize>,
-
-    #[arg(long)]
-    /// For a quantifier-free body which supports unit clauses/cubes, like pDNF,
-    /// this determines the maximal size of non-unit clauses/cubes
-    non_unit: Option<usize>,
 
     #[arg(long)]
     /// The maximal nesting depth of terms in the vocabulary (unbounded if not provided)
@@ -188,92 +154,58 @@ struct InferenceConfigArgs {
     #[arg(long, action)]
     /// Do not include equality terms in the vocabulary
     no_include_eq: bool,
+}
+
+impl QuantifierFreeConfigArgs {
+    fn to_cfg(&self) -> QuantifierFreeConfig {
+        QuantifierFreeConfig {
+            qf_body: self.qf.as_ref().map_or(QfBody::default(), |qf| qf.into()),
+            clause_size: self.clause_size,
+            cubes: self.cubes,
+            nesting: self.nesting,
+        }
+    }
+}
+
+#[derive(Args, Clone, Debug, PartialEq, Eq)]
+struct SimulationConfigArgs {
+    /// What size bound to use for the given sort in simulations, given as SORT=N as in --bound node=2
+    #[arg(long)]
+    bound: Vec<String>,
+
+    /// Instead of a bound for each sort, bound the sum of sort sizes
+    #[arg(long)]
+    bound_sum: Option<usize>,
+
+    #[arg(long)]
+    /// Run simulations up to this depth
+    depth: Option<usize>,
+
+    #[arg(long)]
+    /// In simulations, consider the depth from the last counterexample found
+    guided: bool,
+
+    #[arg(long)]
+    /// Run simulations in a DFS manner (default is BFS)
+    dfs: bool,
+}
+
+#[derive(Args, Clone, Debug, PartialEq, Eq)]
+struct InferenceConfigArgs {
+    #[command(flatten)]
+    quant_cfg: QuantifierConfigArgs,
+
+    #[arg(long)]
+    /// Number of different seeds to try the solvers with
+    seeds: Option<usize>,
 
     #[arg(long)]
     /// Do not try to decompose the transition relation disjunctively
     no_disj: bool,
 
     #[arg(long)]
-    /// Perform SMT queries gradually
-    gradual_smt: bool,
-
-    #[arg(long)]
-    /// Perform SMT queries gradually and minimally
-    minimal_smt: bool,
-
-    #[arg(long)]
-    /// Try to extend model traces before looking for CEX in the frame
-    extend_width: Option<usize>,
-
-    #[arg(long)]
-    /// Try to extend model traces before looking for CEX in the frame
-    extend_depth: Option<usize>,
-
-    #[arg(long)]
-    /// Launch no new runs after safety has been proven
-    until_safe: bool,
-
-    #[arg(long)]
-    /// Abort a run once it is evident that safety cannot be proven
-    abort_unsafe: bool,
-
-    #[arg(long)]
-    /// Grow the domain of quantified lemmas by this factor each iteration (default: 5)
-    growth_factor: Option<usize>,
-}
-
-impl InferenceConfigArgs {
-    fn to_cfg(&self, sig: &Signature, fname: String) -> InferenceConfig {
-        let qf_body = match &self.qf_body {
-            None => fixpoint::defaults::QF_BODY,
-            Some(qf_body_str) => {
-                if qf_body_str.to_lowercase() == *"cnf" {
-                    QfBody::CNF
-                } else if qf_body_str.to_lowercase() == *"pdnf" {
-                    QfBody::PDnf
-                } else if qf_body_str.to_lowercase() == *"pdnf-naive" {
-                    QfBody::PDnfNaive
-                } else {
-                    panic!("Invalid choice of quantifier-free body!")
-                }
-            }
-        };
-
-        let mut cfg = InferenceConfig {
-            fname,
-            fallback: self.fallback,
-            cfg: self.q_cfg_args.to_cfg(sig),
-            qf_body,
-            max_size: self.max_size.unwrap_or(fixpoint::defaults::MAX_QUANT),
-            max_existentials: self.max_exist,
-            clauses: self.clauses,
-            clause_size: self.clause_size,
-            cubes: self.cubes,
-            cube_size: self.cube_size,
-            non_unit: self.non_unit,
-            nesting: self.nesting,
-            include_eq: !self.no_include_eq,
-            disj: !self.no_disj,
-            gradual_smt: self.gradual_smt || self.minimal_smt,
-            minimal_smt: self.minimal_smt,
-            extend_width: self.extend_width,
-            extend_depth: self.extend_depth,
-            no_search: self.no_search,
-            until_safe: self.until_safe,
-            abort_unsafe: self.abort_unsafe,
-            growth_factor: self.growth_factor,
-        };
-
-        if self.qf_body.is_none() {
-            cfg.clauses = cfg.clauses.or(fixpoint::defaults::MAX_CLAUSES);
-            cfg.clause_size = cfg.clause_size.or(fixpoint::defaults::MAX_CLAUSE_SIZE);
-            cfg.cubes = cfg.cubes.or(fixpoint::defaults::MAX_CUBES);
-            cfg.cube_size = cfg.cube_size.or(fixpoint::defaults::MAX_CUBE_SIZE);
-            cfg.non_unit = cfg.non_unit.or(fixpoint::defaults::MAX_NON_UNIT);
-        }
-
-        cfg
-    }
+    /// How to perform the SMT queries (full/gradual/minimal)
+    smt_tactic: Option<String>,
 }
 
 #[derive(Args, Clone, Debug, PartialEq, Eq)]
@@ -281,8 +213,70 @@ struct QalphaArgs {
     #[command(flatten)]
     infer_cfg: InferenceConfigArgs,
 
+    #[command(flatten)]
+    sim_cfg: SimulationConfigArgs,
+
+    #[command(flatten)]
+    qf_cfg: QuantifierFreeConfigArgs,
+
+    #[arg(long)]
+    /// Use the baseline implementation the data structures in qalpha
+    baseline: bool,
+
+    #[arg(long)]
+    /// Determines the strategy that is used in addition to the simulations.
+    /// Options are "weaken", "weaken-pd", "houdini", "houdini-pd", or "none".
+    /// "pd" indicates a property-directed strategy.
+    strategy: Option<String>,
+
+    #[arg(long)]
+    /// Launch no new runs after safety has been proven
+    until_safe: bool,
+
     /// File name for a .fly file
     file: String,
+}
+
+impl QalphaArgs {
+    fn to_cfg(&self, m: &Module, fname: String) -> QalphaConfig {
+        let universe = if self.sim_cfg.bound.is_empty() || self.sim_cfg.bound_sum.is_some() {
+            vec![defaults::SIMULATION_SORT_SIZE; m.signature.sorts.len()]
+        } else {
+            let universe_map = get_universe(&m.signature, &self.sim_cfg.bound);
+            m.signature.sorts.iter().map(|s| universe_map[s]).collect()
+        };
+        QalphaConfig {
+            fname,
+            fo: FOModule::new(
+                m,
+                !self.infer_cfg.no_disj,
+                self.infer_cfg
+                    .smt_tactic
+                    .as_ref()
+                    .map_or(SmtTactic::default(), |s| s.into()),
+            ),
+
+            quant_cfg: Arc::new(self.infer_cfg.quant_cfg.to_cfg(&m.signature)),
+
+            qf_cfg: self.qf_cfg.to_cfg(),
+
+            sim: SimulationConfig {
+                universe,
+                sum: self.sim_cfg.bound_sum,
+                depth: self.sim_cfg.depth,
+                guided: self.sim_cfg.guided,
+                dfs: self.sim_cfg.dfs,
+            },
+
+            strategy: self
+                .strategy
+                .as_ref()
+                .map_or(Strategy::default(), |s| s.into()),
+            until_safe: self.until_safe,
+            seeds: self.infer_cfg.seeds.unwrap_or(1),
+            baseline: self.baseline,
+        }
+    }
 }
 
 #[derive(clap::Subcommand, Clone, Debug, PartialEq, Eq)]
@@ -306,8 +300,8 @@ struct InferArgs {
     time: bool,
 
     #[arg(long)]
-    /// Don't print the found invariant (for testing)
-    no_print_invariant: bool,
+    /// Don't print non-deterministic details about the run, e.g., the found invariant or timing information (for testing)
+    no_print_nondet: bool,
 
     #[command(subcommand)]
     infer_cmd: InferCommand,
@@ -328,37 +322,44 @@ struct BoundedArgs {
     print_timing: Option<bool>,
 }
 
+/// Parses the arguments in `bound` into a universe size map.
+///
+/// Ensures that every sort in the given signature is given a bound.
+fn get_universe(sig: &Signature, bound: &[String]) -> HashMap<String, usize> {
+    let mut universe: HashMap<String, usize> = HashMap::new();
+    for b in bound {
+        if let [sort_name, bound_size] = b.split('=').collect::<Vec<&str>>()[..] {
+            let sort_name = sort_name.to_string();
+            if !sig.sorts.contains(&sort_name) {
+                eprintln!("unknown sort name {sort_name} in bound {b}");
+                process::exit(1);
+            }
+            if let Ok(bound_size) = bound_size.parse::<usize>() {
+                universe.insert(sort_name, bound_size);
+            } else {
+                eprintln!("could not parse bound as integer in {b}");
+                process::exit(1);
+            }
+        } else {
+            eprintln!("expected exactly one '=' in bound {b}");
+            process::exit(1);
+        }
+    }
+    if let Some(unbounded_sort) = sig.sorts.iter().find(|&s| !universe.contains_key(s)) {
+        eprintln!(
+            "need a bound for sort {unbounded_sort} on the command line, as in --bound {unbounded_sort}=N"
+        );
+        process::exit(1);
+    }
+    universe
+}
+
 impl BoundedArgs {
     /// Parses the arguments in self.bound into a universe size map.
     ///
     /// Ensures that every sort in the given signature is given a bound.
     fn get_universe(&self, sig: &Signature) -> HashMap<String, usize> {
-        let mut universe: HashMap<String, usize> = HashMap::new();
-        for b in &self.bound {
-            if let [sort_name, bound_size] = b.split('=').collect::<Vec<&str>>()[..] {
-                let sort_name = sort_name.to_string();
-                if !sig.sorts.contains(&sort_name) {
-                    eprintln!("unknown sort name {sort_name} in bound {b}");
-                    process::exit(1);
-                }
-                if let Ok(bound_size) = bound_size.parse::<usize>() {
-                    universe.insert(sort_name, bound_size);
-                } else {
-                    eprintln!("could not parse bound as integer in {b}");
-                    process::exit(1);
-                }
-            } else {
-                eprintln!("expected exactly one '=' in bound {b}");
-                process::exit(1);
-            }
-        }
-        if let Some(unbounded_sort) = sig.sorts.iter().find(|&s| !universe.contains_key(s)) {
-            eprintln!(
-                "need a bound for sort {unbounded_sort} on the command line, as in --bound {unbounded_sort}=N"
-            );
-            process::exit(1);
-        }
-        universe
+        get_universe(sig, &self.bound)
     }
 }
 
@@ -589,12 +590,8 @@ impl App {
                 },
             ) => {
                 m.inline_defs();
-                let infer_cfg = Arc::new(
-                    qargs
-                        .infer_cfg
-                        .to_cfg(&m.signature, args.infer_cmd.file().to_string()),
-                );
-                qalpha_dynamic(infer_cfg, &m, !args.no_print_invariant);
+                let infer_cfg = Arc::new(qargs.to_cfg(&m, args.infer_cmd.file().to_string()));
+                qalpha_dynamic(infer_cfg, &m, !args.no_print_nondet);
                 if args.time {
                     timing::report();
                 }

@@ -19,14 +19,10 @@
 #![allow(rustdoc::private_intra_doc_links)]
 #![deny(rustdoc::broken_intra_doc_links)]
 
-pub mod atoms;
 pub mod basics;
-pub mod fixpoint;
 pub mod hashmap;
 pub mod houdini;
-pub mod lemma;
 pub mod marco;
-pub mod quant;
-pub mod subsume;
+mod parallel;
+pub mod qalpha;
 pub mod updr;
-pub mod weaken;

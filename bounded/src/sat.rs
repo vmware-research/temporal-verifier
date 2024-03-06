@@ -43,7 +43,7 @@ pub fn check(
         .cloned();
     let safeties = d.proofs.iter().map(|proof| proof.safety.x.clone());
 
-    let mut indices = Indices::new(&module.signature, universe, depth + 1);
+    let mut indices = Indices::new(module.signature.clone(), universe, depth + 1);
 
     let translate = |term| {
         enumerate_quantifiers(&term, &module.signature, universe)
@@ -104,13 +104,15 @@ pub fn check(
     answer
 }
 
+/// A propositional literal, composed of an index and whether it is positive.
 #[derive(Clone, Debug, PartialEq)]
-struct Literal {
+pub struct Literal {
     var: usize,
     pos: bool,
 }
 type Clause = Vec<Literal>;
-type Cnf = Vec<Clause>;
+/// A propositional CNF.
+pub type Cnf = Vec<Clause>;
 
 impl Literal {
     fn t(var: usize) -> Literal {
@@ -119,9 +121,14 @@ impl Literal {
     fn f(var: usize) -> Literal {
         Literal { var, pos: false }
     }
+    /// Convert this literal to a CaDiCaL literal respreseted as a signed integer.
+    pub fn as_int(&self) -> i32 {
+        (self.var as i32 + 1) * if self.pos { 1 } else { -1 }
+    }
 }
 
-fn tseytin(term: &Enumerated, indices: &mut Indices) -> Cnf {
+/// Perform the Tseytin transformation on the given term.
+pub fn tseytin(term: &Enumerated, indices: &mut Indices) -> Cnf {
     fn inner(term: &Enumerated, indices: &mut Indices, out: &mut Cnf) -> usize {
         let mut go = |term| inner(term, indices, out);
         match term {

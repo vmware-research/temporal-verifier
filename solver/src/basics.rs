@@ -4,9 +4,9 @@
 //! Traits defining a very basic interface to SMT solvers and a few implementations of them.
 
 use itertools::Itertools;
-use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
+use std::thread;
 
 use fly::{
     semantics::Model,
@@ -27,15 +27,18 @@ fn check_sat_conf(
     assertions: &[Term],
     assumptions: &HashMap<usize, (Term, bool)>,
 ) -> Result<BasicSolverResp, SolverError> {
+    let assump_sizes: Vec<_> = assumptions.values().map(|(t, _)| t.size()).collect();
     let start_time = std::time::Instant::now();
     let log_result = |res: String| {
         log::debug!(
-            "            {:?}(timeout={}) returned {res} after {}ms ({} assertions, {} assumptions)",
+            "            {:?}(timeout={}) returned {res} after {}ms ({} assertions, {} assumptions: max_lit={}, sum_lit={})",
             solver_conf.solver_type(),
             solver_conf.get_timeout_ms().unwrap_or(0) / 1000,
             start_time.elapsed().as_millis(),
             assertions.len(),
             assumptions.len(),
+            assump_sizes.iter().max().unwrap_or(&0),
+            assump_sizes.iter().sum::<usize>()
         );
     };
     let mut solver = solver_conf.solver(query_conf.sig, query_conf.n_states);
@@ -60,16 +63,26 @@ fn check_sat_conf(
 
     let resp = match solver.check_sat(solver_assumptions) {
         Ok(SatResp::Sat) => {
-            log_result("SAT".to_string());
+            let get_model_start = std::time::Instant::now();
             let get_model_resp = if query_conf.minimal_model {
                 solver.get_minimal_model()
             } else {
                 solver.get_model()
             };
-            get_model_resp.map(BasicSolverResp::Sat)
+            let res = get_model_resp.map(BasicSolverResp::Sat);
+            match &res {
+                Ok(BasicSolverResp::Sat(models)) => log_result(format!(
+                    "SAT({}ms, {:?})",
+                    get_model_start.elapsed().as_millis(),
+                    models[0].universe
+                )),
+                Err(err) => log_result(format!("error: {err}")),
+                _ => unreachable!(),
+            }
+            res
         }
         Ok(SatResp::Unsat) => solver.get_unsat_core().map(|core| {
-            log_result("UNSAT".to_string());
+            log_result(format!("UNSAT({})", core.len()));
             BasicSolverResp::Unsat(
                 core.into_iter()
                     .map(|ind| match ind.0 {
@@ -97,13 +110,13 @@ fn check_sat_conf(
 }
 
 /// Defines a configuration for performing a solver query.
-pub struct QueryConf<'a, C: BasicSolverCanceler> {
+pub struct QueryConf<'a, C: BasicCanceler> {
     /// The signature used
     pub sig: &'a Signature,
     /// The number of states
     pub n_states: usize,
-    /// Optional [`SolverCancelers`] which can be used to cancel the query at any time
-    pub cancelers: Option<SolverCancelers<C>>,
+    /// Optional [`MultiCanceler`] which can be used to cancel the query at any time
+    pub cancelers: Option<MultiCanceler<C>>,
     /// Whether to return a minimal model in case of satifiability
     pub minimal_model: bool,
     /// Whether to save the solver tee after the query
@@ -123,7 +136,7 @@ pub enum BasicSolverResp {
 /// A basic solver interface
 pub trait BasicSolver: Sync + Send {
     /// A canceler type for this solver, able to cancel queries at any time
-    type Canceler: BasicSolverCanceler;
+    type Canceler: BasicCanceler;
 
     /// Check the satisfiability of the following query using the solver.
     /// The query is defined by a query configuration, a sequence of assertions,
@@ -138,45 +151,52 @@ pub trait BasicSolver: Sync + Send {
     ) -> Result<BasicSolverResp, SolverError>;
 }
 
-/// A basic canceler object for a solver, able to cancel queries at any time
-pub trait BasicSolverCanceler: Sync + Send {
+/// A basic canceler object, able to cancel queries at any time
+pub trait BasicCanceler: Sync + Send {
     /// Cancel the query associated with this canceler.
     fn cancel(&self);
+
+    /// Check whether the canceler has been canceled.
+    fn is_canceled(&self) -> bool;
 }
 
-/// Maintains a set of [`BasicSolverCanceler`]'s which can be used to cancel queries whenever necessary.
+/// Maintains a set of [`BasicCanceler`]'s which can be used to cancel queries whenever necessary.
 /// Composed of a `bool` which tracks whether the set has been canceled, followed by the
-/// [`BasicSolverCanceler`]'s of the solvers it tracks.
+/// [`BasicCanceler`]'s of the solvers it tracks.
 ///
-/// Note that this can be used recursively to create hierarchical cancellation, since [`SolverCancelers`]
-/// itself implements [`BasicSolverCanceler`]. That is, multiple [`SolverCancelers`] -- which can be canceled
-/// individually -- can be aggregated within a higher-order [`SolverCancelers`] which can cancel them all at once.
+/// Note that this can be used recursively to create hierarchical cancellation, since [`MultiCanceler`]
+/// itself implements [`BasicCanceler`]. That is, multiple [`MultiCanceler`] -- which can be canceled
+/// individually -- can be aggregated within a higher-order [`MultiCanceler`] which can cancel them all at once.
 /// This enables a tree-like structure where the cancellation of a node cancels all of its descendants.
-pub struct SolverCancelers<C: BasicSolverCanceler>(Arc<Mutex<(bool, Vec<C>)>>);
+pub struct MultiCanceler<C: BasicCanceler>(Arc<RwLock<(bool, Vec<C>)>>);
 
-impl<C: BasicSolverCanceler> Clone for SolverCancelers<C> {
+impl<C: BasicCanceler> Clone for MultiCanceler<C> {
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
-impl<C: BasicSolverCanceler> Default for SolverCancelers<C> {
+impl<C: BasicCanceler> Default for MultiCanceler<C> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<C: BasicSolverCanceler> SolverCancelers<C> {
+impl<C: BasicCanceler> MultiCanceler<C> {
     /// Create a new empty set of solver cancelers.
     pub fn new() -> Self {
-        SolverCancelers(Arc::new(Mutex::new((false, vec![]))))
+        MultiCanceler(Arc::new(RwLock::new((false, vec![]))))
     }
 
     /// Add the given canceler to the set of cancelers.
     ///
-    /// Returns `true` if the [`BasicSolverCanceler`] was added, or `false` if the set has already been canceled.
+    /// Returns `true` if the [`BasicCanceler`] was added, or `false` if the set has already been canceled.
     pub fn add_canceler(&self, canceler: C) -> bool {
-        let mut cancelers = self.0.lock().unwrap();
+        if self.is_canceled() {
+            return false;
+        }
+
+        let mut cancelers = self.0.write().unwrap();
         if cancelers.0 {
             false
         } else {
@@ -186,14 +206,32 @@ impl<C: BasicSolverCanceler> SolverCancelers<C> {
     }
 }
 
-impl<C: BasicSolverCanceler> BasicSolverCanceler for SolverCancelers<C> {
+impl<C: BasicCanceler> BasicCanceler for MultiCanceler<C> {
     /// Cancel all solvers tracked by this set of cancelers.
     fn cancel(&self) {
-        let mut cancelers = self.0.lock().unwrap();
+        let mut cancelers = self.0.write().unwrap();
         cancelers.0 = true;
         for canceler in cancelers.1.drain(..) {
             canceler.cancel();
         }
+    }
+
+    fn is_canceled(&self) -> bool {
+        let cancelers = self.0.read().unwrap();
+        cancelers.0
+    }
+}
+
+/// A canceler than can never be canceled
+pub struct NeverCanceler;
+
+impl BasicCanceler for NeverCanceler {
+    fn cancel(&self) {
+        panic!("NeverCanceler cannot be canceled")
+    }
+
+    fn is_canceled(&self) -> bool {
+        false
     }
 }
 
@@ -210,9 +248,13 @@ pub struct FallbackSolvers(Vec<SolverConf>);
 /// (2) the query is canceled, or (3) all solvers return unknown.
 pub struct ParallelSolvers(Vec<SolverConf>);
 
-impl BasicSolverCanceler for SmtPid {
+impl BasicCanceler for SmtPid {
     fn cancel(&self) {
         self.kill()
+    }
+
+    fn is_canceled(&self) -> bool {
+        self.is_killed()
     }
 }
 
@@ -285,7 +327,7 @@ impl ParallelSolvers {
 }
 
 impl BasicSolver for ParallelSolvers {
-    type Canceler = SolverCancelers<SmtPid>;
+    type Canceler = MultiCanceler<SmtPid>;
 
     fn check_sat(
         &self,
@@ -293,7 +335,7 @@ impl BasicSolver for ParallelSolvers {
         assertions: &[Term],
         assumptions: &HashMap<usize, (Term, bool)>,
     ) -> Result<BasicSolverResp, SolverError> {
-        let local_cancelers: SolverCancelers<SmtPid> = SolverCancelers::new();
+        let local_cancelers: MultiCanceler<SmtPid> = MultiCanceler::new();
         let local_query_conf = QueryConf {
             sig: query_conf.sig,
             n_states: query_conf.n_states,
@@ -310,26 +352,35 @@ impl BasicSolver for ParallelSolvers {
             return Err(SolverError::Killed);
         }
 
-        let results: Vec<_> = self
-            .0
-            .par_iter()
-            .map(|solver_conf| {
-                let res = check_sat_conf(solver_conf, &local_query_conf, assertions, assumptions);
-                match res {
-                    Err(SolverError::Killed) => Err(SolverError::Killed),
-                    Ok(BasicSolverResp::Unknown(reason))
-                    | Err(SolverError::CouldNotMinimize(reason)) => {
-                        Ok(BasicSolverResp::Unknown(reason))
-                    }
-                    // This case is reached only if the result is SAT, UNSAT, or some error other than SolverError::Killed,
-                    // which means that the other solvers should be canceled.
-                    _ => {
-                        local_cancelers.cancel();
-                        res
-                    }
-                }
-            })
-            .collect();
+        let results = thread::scope(|s| {
+            let handles = self
+                .0
+                .iter()
+                .map(|solver_conf| {
+                    s.spawn(|| {
+                        let res =
+                            check_sat_conf(solver_conf, &local_query_conf, assertions, assumptions);
+                        match res {
+                            Err(SolverError::Killed) => Err(SolverError::Killed),
+                            Ok(BasicSolverResp::Unknown(reason))
+                            | Err(SolverError::CouldNotMinimize(reason)) => {
+                                Ok(BasicSolverResp::Unknown(reason))
+                            }
+                            // This case is reached only if the result is SAT, UNSAT, or some error other than SolverError::Killed,
+                            // which means that the other solvers should be canceled.
+                            _ => {
+                                local_cancelers.cancel();
+                                res
+                            }
+                        }
+                    })
+                })
+                .collect_vec();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .collect_vec()
+        });
 
         let mut sat_or_unsat = vec![];
         let mut unknowns = vec![];

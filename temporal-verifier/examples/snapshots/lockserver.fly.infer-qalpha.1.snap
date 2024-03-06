@@ -1,0 +1,14 @@
+---
+source: temporal-verifier/tests/test_examples.rs
+description: "--name=infer-qalpha.1 -- infer --no-print-nondet qalpha --quantifier 'F node 2' '--clause-size=3' '--cubes=0' '--strategy=weaken' examples/lockserver.fly"
+expression: combined_stdout_stderr
+---
+Generating literals...
+Generated 19 literals in 0ms (0 containing variables after first existential)
+Running qalpha algorithm...
+Approximate domain size: 10^3.90
+Fixpoint REACHED! frame_size=12, reduced_size=12
+Safety VERIFIED! proof_size=9
+
+======== STDERR: ===========
+

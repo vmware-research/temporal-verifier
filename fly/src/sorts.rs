@@ -30,6 +30,7 @@
 
 use crate::syntax::*;
 use ena::unify::{UnifyKey, UnifyValue};
+use itertools::Itertools;
 use std::collections::HashSet;
 use thiserror::Error;
 
@@ -160,17 +161,17 @@ enum RelationOrIndividual {
 }
 
 impl RelationOrIndividual {
-    fn args_ret(args: &Vec<Sort>, ret: &Sort) -> RelationOrIndividual {
+    fn args_ret(args: &[Sort], ret: &Sort) -> RelationOrIndividual {
         if args.is_empty() {
             Self::known(ret)
         } else {
-            Self::Relation(args.clone(), ret.clone())
+            Self::Relation(args.to_owned(), ret.clone())
         }
     }
 
     fn definition(decl: &Definition) -> RelationOrIndividual {
         Self::args_ret(
-            &decl.binders.iter().map(|b| b.sort.clone()).collect(),
+            &decl.binders.iter().map(|b| b.sort.clone()).collect_vec(),
             &decl.ret_sort,
         )
     }
@@ -474,7 +475,7 @@ impl Scope<'_> {
         &mut self,
         module: &mut Module,
     ) -> Result<(), (SortError, Option<Span>)> {
-        assert!(module.signature == *self.signature);
+        assert!(module.signature.as_ref() == self.signature);
 
         self.sort_check_definitions(&mut module.defs)
             .map_err(|e| (e, None))?;

@@ -1,6 +1,9 @@
 # Copyright 2022-2023 VMware, Inc.
 # SPDX-License-Identifier: BSD-2-Clause
 
+# this file is intended to be sourced and does not need shellcheck
+# shellcheck disable=all
+
 # these are the versions used by download-solvers.sh and expected by the
 # integration tests
 Z3_VERSION="4.12.2"

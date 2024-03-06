@@ -107,7 +107,7 @@ impl Enumerated {
     }
 
     /// Constructs a conjunction, doing minor simplifications.
-    fn and(terms: impl IntoIterator<Item = Enumerated>) -> Enumerated {
+    pub fn and(terms: impl IntoIterator<Item = Enumerated>) -> Enumerated {
         let mut terms: Vec<_> = terms
             .into_iter()
             .flat_map(Enumerated::get_and)

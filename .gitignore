@@ -5,6 +5,8 @@
 /solvers/
 # coverage report
 lcov.info
+# results directory for benchmark qalpha
+/qalpha-results/
 
 # Added by cargo
 /target

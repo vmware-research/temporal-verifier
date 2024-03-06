@@ -26,7 +26,7 @@ pub type Assignment = im::HashMap<String, Element>;
 
 /// An interpretation gives the complete value of a function for a
 /// finite-cardinality universe.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Hash)]
 pub struct Interpretation {
     /// The type of this function, given as the cardinality first of all the
     /// inputs and finally the cardinality of the output.
@@ -51,7 +51,7 @@ impl Interpretation {
 
     /// Create a new interpretation of a given shape based on a function, by
     /// calling the function on all possible input tuple
-    pub fn new(shape: &Vec<usize>, f: impl Fn(&[Element]) -> Element) -> Self {
+    pub fn new(shape: &[usize], f: impl Fn(&[Element]) -> Element) -> Self {
         let args = &shape[..shape.len() - 1];
         let ret_card = shape[shape.len() - 1];
         // wrap f just to add this assertion
@@ -67,7 +67,7 @@ impl Interpretation {
             .map(|args| f(&args))
             .collect();
         Self {
-            shape: shape.clone(),
+            shape: shape.to_owned(),
             data,
         }
     }
@@ -76,7 +76,7 @@ impl Interpretation {
 /// A Model is a finite structure that includes a Signature, a Universe for the
 /// sorts in the signature, and an interpretation of all the functions in the
 /// signature.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Hash)]
 pub struct Model {
     // TODO(oded): to optimize, make things Rc<_> (_ = Signature, Universe, and Interpretation)
     /// The signature this model is for
@@ -128,7 +128,7 @@ impl Model {
     ///
     /// The term should be closed (that is, have no free logical variables).
     pub fn eval(&self, t: &Term) -> Element {
-        self.eval_assign(t, Assignment::new())
+        self.eval_assign(t, &Assignment::new())
     }
 
     /// Evaluate a term to a model element, given an assignment of
@@ -136,8 +136,8 @@ impl Model {
     ///
     /// The assignment is unsorted, and so is the return value of this
     /// function.
-    pub fn eval_assign(&self, t: &Term, assignment: Assignment) -> Element {
-        let go = |t: &Term| self.eval_assign(t, assignment.clone());
+    pub fn eval_assign(&self, t: &Term, assignment: &Assignment) -> Element {
+        let go = |t: &Term| self.eval_assign(t, assignment);
         match t {
             Term::Literal(false) => 0,
             Term::Literal(true) => 1,
@@ -230,7 +230,7 @@ impl Model {
                         for (name, element) in names.iter().zip(elements) {
                             assignment.insert(name.to_string(), element);
                         }
-                        self.eval_assign(body, assignment) == 1
+                        self.eval_assign(body, &assignment) == 1
                     });
                 let result = match quantifier {
                     Forall => iter.all(|x| x),
@@ -252,9 +252,9 @@ impl Model {
 
     /// Negate the necessary terms in order to make all given terms hold
     /// on the model and the given assignment.
-    pub fn flip_to_sat(&self, terms: &mut Vec<Term>, assignment: Assignment) {
+    pub fn flip_to_sat(&self, terms: &mut Vec<Term>, assignment: &Assignment) {
         for term in terms {
-            if self.eval_assign(term, assignment.clone()) == 0 {
+            if self.eval_assign(term, assignment) == 0 {
                 *term = Term::negate(term.clone());
             }
         }
@@ -299,7 +299,7 @@ impl Model {
 
         // Get depth=1 terms (without inequalities).
         let mut terms = self.signature.terms_by_sort(&exists_vars, Some(1), false);
-        self.flip_to_sat(&mut terms[sort_cnt], assignment.clone());
+        self.flip_to_sat(&mut terms[sort_cnt], &assignment);
 
         for i in 0..sort_cnt {
             let mut new_terms = vec![];
@@ -314,7 +314,7 @@ impl Model {
             }
             // Add equalities for the other terms of sort i.
             for j in self.universe[i]..terms[i].len() {
-                let elem = self.eval_assign(&terms[i][j], assignment.clone());
+                let elem = self.eval_assign(&terms[i][j], &assignment);
                 new_terms.push(Term::BinOp(
                     BinOp::Equals,
                     Box::new(terms[i][j].clone()),
@@ -499,18 +499,18 @@ mod tests {
 
     #[test]
     fn test_interp_new() {
-        let interp = Interpretation::new(&vec![3], |_| 2);
+        let interp = Interpretation::new(&[3], |_| 2);
         assert_eq!(interp.get(&[]), 2);
         assert_eq!(interp.data, vec![2]);
 
-        let interp = Interpretation::new(&vec![3, 2, 4], |es| es[0] + es[1]);
+        let interp = Interpretation::new(&[3, 2, 4], |es| es[0] + es[1]);
         for i in 0..3 {
             for j in 0..2 {
                 assert_eq!(interp.get(&[i, j]), i + j, "wrong value at {i}, {j}");
             }
         }
 
-        let interp = Interpretation::new(&vec![3, 2, 4, 7], |es| es[0] + es[1] * es[2]);
+        let interp = Interpretation::new(&[3, 2, 4, 7], |es| es[0] + es[1] * es[2]);
         for i in 0..3 {
             for j in 0..2 {
                 for k in 0..4 {

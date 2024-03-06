@@ -17,7 +17,7 @@ sort request
 
 
 # relations:
-mutable match_(request, response): bool
+immutable match_(request, response): bool
 mutable request_sent(node, request): bool
 mutable response_sent(node, response): bool
 mutable response_received(node, response): bool

@@ -1,7 +1,7 @@
+#!/usr/bin/env bash
+
 # Copyright 2022-2023 VMware, Inc.
 # SPDX-License-Identifier: BSD-2-Clause
-
-#!/usr/bin/env bash
 
 ## Gather code coverage from tests.
 ##

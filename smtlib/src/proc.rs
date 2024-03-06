@@ -16,7 +16,7 @@ use std::{
     io::{self, BufRead, BufReader, ErrorKind, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
-    sync::{Arc, Mutex},
+    sync::{Arc, RwLock},
 };
 use thiserror::Error;
 
@@ -49,14 +49,14 @@ pub struct SmtProc {
     tee: Option<Tee>,
     // signal to SmtPids that this process has terminated (so we don't try to
     // kill the process long afterward when the pid might have been reused)
-    terminated: Arc<Mutex<Status>>,
+    terminated: Arc<RwLock<Status>>,
 }
 
 /// A handle to the SMT process for cancelling an in-progress check.
 #[derive(Clone)]
 pub struct SmtPid {
     pid: Pid,
-    terminated: Arc<Mutex<Status>>,
+    terminated: Arc<RwLock<Status>>,
 }
 
 /// SatResp is a solver's response to a `(check-sat)` or similar command.
@@ -111,7 +111,7 @@ impl Drop for SmtProc {
 impl SmtPid {
     /// Kill the SMT process by pid.
     pub fn kill(&self) {
-        let mut terminated = self.terminated.lock().unwrap();
+        let mut terminated = self.terminated.write().unwrap();
         match *terminated {
             Status::NeedsWait | Status::Terminated | Status::Stopping => {
                 return;
@@ -135,6 +135,15 @@ impl SmtPid {
                 }
             }
         }
+    }
+
+    /// Check whether the SMT process has been killed (or is being killed).
+    pub fn is_killed(&self) -> bool {
+        let terminated = self.terminated.read().unwrap();
+        matches!(
+            *terminated,
+            Status::NeedsWait | Status::Terminated | Status::Stopping
+        )
     }
 }
 
@@ -168,7 +177,7 @@ impl SmtProc {
             stdin,
             stdout,
             tee,
-            terminated: Arc::new(Mutex::new(Status::Running { in_call: false })),
+            terminated: Arc::new(RwLock::new(Status::Running { in_call: false })),
         };
         for (option, val) in &cmd.options {
             proc.send(&app(
@@ -249,7 +258,7 @@ impl SmtProc {
     /// actually send a signal).
     fn start_call(&mut self) -> Result<()> {
         let status_m = self.terminated.clone();
-        let mut status = status_m.lock().unwrap();
+        let mut status = status_m.write().unwrap();
         self.handle_termination_status(&mut status)?;
         assert!(
             *status == Status::Running { in_call: false },
@@ -262,7 +271,7 @@ impl SmtProc {
     /// Mark the solver as being done with an expensive call.
     fn end_call(&mut self) -> Result<()> {
         let status_m = self.terminated.clone();
-        let mut status = status_m.lock().unwrap();
+        let mut status = status_m.write().unwrap();
         self.handle_termination_status(&mut status)?;
         assert!(
             *status == Status::Running { in_call: true },
@@ -297,7 +306,7 @@ impl SmtProc {
 
     fn check_killed(&mut self) -> Result<()> {
         let status_m = self.terminated.clone();
-        let mut status = status_m.lock().unwrap();
+        let mut status = status_m.write().unwrap();
         self.handle_termination_status(&mut status)?;
         Ok(())
     }
@@ -355,7 +364,7 @@ impl SmtProc {
         _ = self.stdin.flush();
         _ = self.child.kill();
         _ = self.child.wait();
-        *self.terminated.lock().unwrap() = Status::Terminated;
+        *self.terminated.write().unwrap() = Status::Terminated;
     }
 
     // ========================
@@ -366,7 +375,7 @@ impl SmtProc {
     /// should only be used for commands that do not require a response.
     pub fn send(&mut self, data: &sexp::Sexp) {
         let status_m = self.terminated.clone();
-        let mut status = status_m.lock().unwrap();
+        let mut status = status_m.write().unwrap();
         if self.handle_termination_status(&mut status).is_err() {
             // solver has been cancelled, pretend like the command succeeded
             return;

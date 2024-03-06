@@ -16,7 +16,7 @@ Run `./tools/download-solvers.sh` to get compatible versions of the supported SM
 ```sh
 cargo run -- verify temporal-verifier/examples/lockserver.fly
 
-cargo run -- infer qalpha temporal-verifier/examples/lockserver.fly --max-exist 0 --until-safe
+cargo run -- infer qalpha temporal-verifier/examples/lockserver.fly --quantifier "F node 2" --clause-size=3 --cubes=0
 
 # invariant inference with qalpha
 # note: this example takes several minutes to run

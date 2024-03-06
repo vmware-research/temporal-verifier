@@ -3,14 +3,14 @@
 
 use itertools;
 use itertools::Itertools;
-use rayon::prelude::*;
 use std::{
-    collections::{HashMap, HashSet},
-    sync::Mutex,
-    time::Instant,
+    collections::{BTreeMap, HashMap, HashSet},
+    hash::Hash,
+    sync::{Arc, Mutex},
+    thread,
 };
 
-use crate::quant::QuantifierConfig;
+use crate::qalpha::{fixpoint::Strategy, quant::QuantifierConfig};
 use fly::syntax::BinOp;
 use fly::syntax::Term::*;
 use fly::syntax::*;
@@ -18,18 +18,18 @@ use fly::term::{prime::clear_next, prime::Next};
 use fly::{ouritertools::OurItertools, semantics::Model, transitions::*};
 use smtlib::proc::{SatResp, SolverError};
 use solver::{
-    basics::{BasicSolver, BasicSolverCanceler, BasicSolverResp, QueryConf, SolverCancelers},
+    basics::{BasicCanceler, BasicSolver, BasicSolverResp, MultiCanceler, QueryConf},
     conf::SolverConf,
 };
 
-pub enum CexResult {
+pub enum CexResult<K: Eq + Hash> {
     Cex(Vec<Model>),
-    UnsatCore(HashSet<usize>),
+    UnsatCore(HashSet<K>),
     Canceled,
     Unknown(String),
 }
 
-impl CexResult {
+impl<K: Eq + Hash> CexResult<K> {
     /// Convert into an [`Option`], which either contains a counterexample or [`None`].
     pub fn into_option(self) -> Option<Vec<Model>> {
         match self {
@@ -56,20 +56,20 @@ impl CexResult {
 /// counterexamples to be blocked and growing the core in a minimal way to block all of them.
 /// If `minimal` is set, the core is guaranteed to be minimal in the local sense that
 /// no formula can be dropped from it while still blocking all the previous counterexamples.
-struct Core<'a> {
-    formulas: &'a [Term],
-    participants: HashSet<usize>,
+struct Core<H: OrderedTerms> {
+    formulas: H,
+    participants: BTreeMap<H::Key, Term>,
     counter_models: Vec<Model>,
-    to_participants: HashMap<usize, HashSet<usize>>,
-    to_counter_models: HashMap<usize, HashSet<usize>>,
+    to_participants: HashMap<usize, HashSet<H::Key>>,
+    to_counter_models: HashMap<H::Key, HashSet<usize>>,
     minimal: bool,
 }
 
-impl<'a> Core<'a> {
+impl<H: OrderedTerms> Core<H> {
     /// Create a new core from the given formulas. `participants` specifies which formulas
     /// to intialize the core with, and `minimal` determines whether to minimize the core
     /// when adding future participants.
-    fn new(formulas: &'a [Term], participants: HashSet<usize>, minimal: bool) -> Self {
+    fn new(formulas: H, participants: BTreeMap<H::Key, Term>, minimal: bool) -> Self {
         Core {
             formulas,
             participants,
@@ -87,37 +87,28 @@ impl<'a> Core<'a> {
     /// Returns `true` if the model has been successfully blocked or `false` if it couldn't be
     /// blocked because it satisfied all candidate formulas.
     fn add_counter_model(&mut self, counter_model: Model) -> bool {
-        // We assume that the new counter-model satisfies all previous formulas.
-        for &p_idx in &self.participants {
-            assert_eq!(counter_model.eval(&self.formulas[p_idx]), 1);
-        }
-
-        let new_participant = self.formulas.iter().enumerate().find(|(i, formula)| {
-            !self.participants.contains(i) && counter_model.eval(formula) == 0
-        });
-
-        match new_participant {
-            Some((p_idx, _)) => {
+        match self.formulas.first_unsat(&counter_model) {
+            Some((key, term)) => {
                 let model_idx = self.counter_models.len();
-                self.participants.insert(p_idx);
                 self.to_participants.insert(model_idx, HashSet::new());
                 let mut counter_models: HashSet<usize> = (0..self.counter_models.len())
-                    .filter(|i| self.counter_models[*i].eval(&self.formulas[p_idx]) == 0)
+                    .filter(|i| self.counter_models[*i].eval(&term) == 0)
                     .collect();
                 counter_models.insert(model_idx);
                 self.counter_models.push(counter_model);
                 for m_idx in &counter_models {
-                    self.to_participants.get_mut(m_idx).unwrap().insert(p_idx);
+                    self.to_participants.get_mut(m_idx).unwrap().insert(key);
                 }
-                self.to_counter_models.insert(p_idx, counter_models);
+                self.to_counter_models.insert(key, counter_models);
+                self.participants.insert(key, term);
 
                 if self.minimal {
                     while self.reduce() {}
 
-                    assert!(self.participants.iter().all(|p_idx| {
-                        self.to_counter_models[p_idx]
+                    assert!(self.participants.keys().all(|key| {
+                        self.to_counter_models[key]
                             .iter()
-                            .any(|m_idx| self.to_participants[m_idx] == HashSet::from([*p_idx]))
+                            .any(|m_idx| self.to_participants[m_idx] == HashSet::from([*key]))
                     }));
                 }
 
@@ -132,21 +123,14 @@ impl<'a> Core<'a> {
     ///
     /// Returns `true` if the core has been reduced, or `false` otherwise.
     fn reduce(&mut self) -> bool {
-        if let Some(p_idx) = self
-            .participants
-            .iter()
-            .copied()
-            .sorted()
-            .rev()
-            .find(|p_idx| {
-                self.to_counter_models[p_idx]
-                    .iter()
-                    .all(|m_idx| self.to_participants[m_idx].len() > 1)
-            })
-        {
-            assert!(self.participants.remove(&p_idx));
-            for m_idx in self.to_counter_models.remove(&p_idx).unwrap() {
-                assert!(self.to_participants.get_mut(&m_idx).unwrap().remove(&p_idx));
+        if let Some(key) = self.participants.keys().cloned().rev().find(|p_idx| {
+            self.to_counter_models[p_idx]
+                .iter()
+                .all(|m_idx| self.to_participants[m_idx].len() > 1)
+        }) {
+            assert!(self.participants.remove(&key).is_some());
+            for m_idx in self.to_counter_models.remove(&key).unwrap() {
+                assert!(self.to_participants.get_mut(&m_idx).unwrap().remove(&key));
             }
 
             true
@@ -159,10 +143,35 @@ impl<'a> Core<'a> {
     /// This yields a map which maps each participant index to its [`Term`] and Boolean assumption,
     /// in this case always `true`.
     fn to_assumptions(&self) -> HashMap<usize, (Term, bool)> {
-        self.participants
-            .iter()
-            .map(|i| (*i, (self.formulas[*i].clone(), true)))
+        self.present()
+            .enumerate()
+            .map(|(i, (_, t))| (i, (t.clone(), true)))
             .collect()
+    }
+
+    /// Convert a core returned by the solver to one of `H::Key` elements.
+    fn convert_core<O>(&self, core: &HashSet<usize>) -> O
+    where
+        O: FromIterator<H::Key>,
+    {
+        self.present()
+            .enumerate()
+            .filter_map(|(i, (k, _))| if core.contains(&i) { Some(*k) } else { None })
+            .collect()
+    }
+
+    /// Get the keys and terms currently present in the core.
+    fn present(&self) -> impl Iterator<Item = (&H::Key, &Term)> {
+        let permanent = self.formulas.permanent();
+        let seen: HashSet<H::Key> = permanent.iter().map(|(k, _)| **k).collect();
+        permanent
+            .into_iter()
+            .chain(
+                self.participants
+                    .iter()
+                    .filter(move |(k, _)| !seen.contains(k)),
+            )
+            .unique()
     }
 }
 
@@ -177,26 +186,56 @@ pub enum CexOrCore {
     Core(HashMap<Term, bool>),
 }
 
+pub trait OrderedTerms: Copy + Send + Sync {
+    type Key: Ord + Hash + Eq + Clone + Copy + Send + Sync;
+
+    fn permanent(&self) -> Vec<(&Self::Key, &Term)>;
+
+    fn first_unsat(self, model: &Model) -> Option<(Self::Key, Term)>;
+
+    fn all_terms(self) -> BTreeMap<Self::Key, Term>;
+}
+
+impl<V: AsRef<[Term]> + Copy + Send + Sync> OrderedTerms for V {
+    type Key = usize;
+
+    fn permanent(&self) -> Vec<(&Self::Key, &Term)> {
+        vec![]
+    }
+
+    fn first_unsat(self, model: &Model) -> Option<(Self::Key, Term)> {
+        self.as_ref().iter().enumerate().find_map(|(i, t)| {
+            if model.eval(t) == 0 {
+                Some((i, t.clone()))
+            } else {
+                None
+            }
+        })
+    }
+
+    fn all_terms(self) -> BTreeMap<Self::Key, Term> {
+        self.as_ref().iter().cloned().enumerate().collect()
+    }
+}
+
 /// A first-order module is represented using first-order formulas,
 /// namely single-vocabulary axioms, initial assertions and safety assertions,
 /// and double-vocabulary transition assertions.
 /// `disj` denotes whether to split the transitions disjunctively, if possible.
 pub struct FOModule {
-    signature: Signature,
+    signature: Arc<Signature>,
     pub module: DestructuredModule,
     disj: bool,
-    gradual: bool,
-    minimal: bool,
+    smt_tactic: SmtTactic,
 }
 
 impl FOModule {
-    pub fn new(m: &Module, disj: bool, gradual: bool, minimal: bool) -> Self {
+    pub fn new(m: &Module, disj: bool, smt_tactic: SmtTactic) -> Self {
         FOModule {
             signature: m.signature.clone(),
             module: extract(m).unwrap(),
             disj,
-            gradual,
-            minimal,
+            smt_tactic,
         }
     }
 
@@ -217,7 +256,7 @@ impl FOModule {
     }
 
     pub fn init_cex<B: BasicSolver>(&self, solver: &B, t: &Term) -> Option<Model> {
-        self.implication_cex(solver, &self.module.inits, t)
+        self.implication_cex(solver, &self.module.inits, t, None, false)
             .into_option()
             .map(|mut models| {
                 assert_eq!(models.len(), 1);
@@ -225,22 +264,22 @@ impl FOModule {
             })
     }
 
-    pub fn trans_cex<B, C>(
+    pub fn trans_cex<H, B, C>(
         &self,
         solver: &B,
-        hyp: &[Term],
+        hyp: H,
         t: &Term,
         with_safety: bool,
-        cancelers: Option<SolverCancelers<SolverCancelers<C>>>,
+        cancelers: Option<MultiCanceler<MultiCanceler<C>>>,
         save_tee: bool,
-    ) -> CexResult
+    ) -> CexResult<H::Key>
     where
-        C: BasicSolverCanceler,
+        H: OrderedTerms,
+        C: BasicCanceler,
         B: BasicSolver<Canceler = C>,
     {
         let transitions = self.disj_trans();
-        let local_cancelers: SolverCancelers<C> = SolverCancelers::new();
-        let start_time = Instant::now();
+        let local_cancelers: MultiCanceler<C> = MultiCanceler::new();
 
         if cancelers
             .as_ref()
@@ -264,42 +303,52 @@ impl FOModule {
         }
         assertions.push(Term::not(next.prime(t)));
 
-        let cex_results: Vec<CexResult> = transitions
-            .into_par_iter()
-            .map(|transition| {
-                let mut core: Core = if self.gradual {
-                    Core::new(hyp, HashSet::new(), self.minimal)
-                } else {
-                    Core::new(hyp, (0..hyp.len()).collect(), self.minimal)
-                };
+        let cex_results: Vec<CexResult<H::Key>> = thread::scope(|s| {
+            transitions
+                .into_iter()
+                .map(|transition| {
+                    s.spawn(|| {
+                        let mut core = match self.smt_tactic {
+                            SmtTactic::Full => Core::new(hyp, hyp.all_terms(), false),
+                            SmtTactic::Gradual => Core::new(hyp, BTreeMap::new(), false),
+                            SmtTactic::Minimal => Core::new(hyp, BTreeMap::new(), true),
+                        };
 
-                let mut local_assertions = assertions.clone();
-                local_assertions.extend(transition.into_iter().cloned());
-                loop {
-                    let assumptions = core.to_assumptions();
-                    match solver.check_sat(&query_conf, &local_assertions, &assumptions) {
-                        Ok(BasicSolverResp::Sat(models)) => {
-                            if !core.add_counter_model(models[0].clone()) {
-                                // A counter-example to the transition was found, no need to search further.
-                                local_cancelers.cancel();
-                                return CexResult::Cex(models);
+                        let mut local_assertions = assertions.clone();
+                        local_assertions.extend(transition.into_iter().cloned());
+                        loop {
+                            let assumptions = core.to_assumptions();
+                            match solver.check_sat(&query_conf, &local_assertions, &assumptions) {
+                                Ok(BasicSolverResp::Sat(models)) => {
+                                    if !core.add_counter_model(models[0].clone()) {
+                                        // A counter-example to the transition was found, no need to search further.
+                                        local_cancelers.cancel();
+                                        return CexResult::Cex(models);
+                                    }
+                                }
+                                Ok(BasicSolverResp::Unsat(c)) => {
+                                    return CexResult::UnsatCore(core.convert_core(&c))
+                                }
+                                Ok(BasicSolverResp::Unknown(reason)) => {
+                                    return CexResult::Unknown(reason)
+                                }
+                                Err(SolverError::Killed) => return CexResult::Canceled,
+                                Err(e) => panic!("error in solver: {e}"),
                             }
                         }
-                        Ok(BasicSolverResp::Unsat(core)) => return CexResult::UnsatCore(core),
-                        Ok(BasicSolverResp::Unknown(reason)) => return CexResult::Unknown(reason),
-                        Err(SolverError::Killed) => return CexResult::Canceled,
-                        Err(e) => panic!("error in solver: {e}"),
-                    }
-                }
-            })
-            .collect();
+                    })
+                })
+                .collect_vec()
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .collect_vec()
+        });
 
         // Check whether any counterexample has been found
         if cex_results
             .iter()
             .any(|res| matches!(res, CexResult::Cex(_)))
         {
-            log::info!("{:>8}ms. Found SAT", start_time.elapsed().as_millis());
             return cex_results
                 .into_iter()
                 .find(|res| matches!(res, CexResult::Cex(_)))
@@ -319,7 +368,6 @@ impl FOModule {
             .iter()
             .any(|res| matches!(res, CexResult::Unknown(_)))
         {
-            log::info!("{:>8}ms. Found unknown", start_time.elapsed().as_millis());
             return CexResult::Unknown(
                 cex_results
                     .into_iter()
@@ -332,73 +380,77 @@ impl FOModule {
         }
 
         // Otherwise, all results must be UNSAT-cores
-        let separate_cores = cex_results
+        let unsat_core = cex_results
             .into_iter()
-            .map(|res| match res {
+            .flat_map(|res| match res {
                 CexResult::UnsatCore(core) => core,
                 _ => unreachable!(),
             })
-            .collect_vec();
-        let core_sizes = separate_cores.iter().map(|core| core.len()).collect_vec();
-        let unsat_core: HashSet<usize> = separate_cores.into_iter().flatten().collect();
-        log::info!(
-            "{:>8}ms. Found UNSAT with {} formulas in core (by transition: {:?})",
-            start_time.elapsed().as_millis(),
-            unsat_core.len(),
-            core_sizes
-        );
+            .collect();
+
         CexResult::UnsatCore(unsat_core)
     }
 
-    pub fn implication_cex<B: BasicSolver>(&self, solver: &B, hyp: &[Term], t: &Term) -> CexResult {
-        let mut core: Core = if self.gradual {
-            Core::new(hyp, HashSet::new(), self.minimal)
-        } else {
-            Core::new(hyp, (0..hyp.len()).collect(), self.minimal)
+    pub fn implication_cex<H, B, C>(
+        &self,
+        solver: &B,
+        hyp: H,
+        t: &Term,
+        cancelers: Option<MultiCanceler<MultiCanceler<C>>>,
+        save_tee: bool,
+    ) -> CexResult<H::Key>
+    where
+        H: OrderedTerms,
+        C: BasicCanceler,
+        B: BasicSolver<Canceler = C>,
+    {
+        let local_cancelers: MultiCanceler<C> = MultiCanceler::new();
+        if cancelers
+            .as_ref()
+            .is_some_and(|c| !c.add_canceler(local_cancelers.clone()))
+        {
+            return CexResult::Canceled;
+        }
+
+        let mut core = match self.smt_tactic {
+            SmtTactic::Full => Core::new(hyp, hyp.all_terms(), false),
+            SmtTactic::Gradual => Core::new(hyp, BTreeMap::new(), false),
+            SmtTactic::Minimal => Core::new(hyp, BTreeMap::new(), true),
         };
 
         let query_conf = QueryConf {
             sig: &self.signature,
             n_states: 1,
-            cancelers: None,
+            cancelers: Some(local_cancelers),
             minimal_model: true,
-            save_tee: false,
+            save_tee,
         };
         let mut assertions = self.module.axioms.clone();
         assertions.push(Term::not(t));
         loop {
-            match solver
-                .check_sat(&query_conf, &assertions, &core.to_assumptions())
-                .expect("error in solver")
-            {
-                BasicSolverResp::Sat(models) => {
+            match solver.check_sat(&query_conf, &assertions, &core.to_assumptions()) {
+                Ok(BasicSolverResp::Sat(models)) => {
                     if !core.add_counter_model(models[0].clone()) {
                         return CexResult::Cex(models);
                     }
                 }
-                BasicSolverResp::Unsat(core) => return CexResult::UnsatCore(core),
-                BasicSolverResp::Unknown(reason) => return CexResult::Unknown(reason),
+                Ok(BasicSolverResp::Unsat(c)) => {
+                    return CexResult::UnsatCore(core.convert_core(&c))
+                }
+                Ok(BasicSolverResp::Unknown(reason)) => return CexResult::Unknown(reason),
+                Err(SolverError::Killed) => return CexResult::Canceled,
+                Err(e) => panic!("error in solver: {e}"),
             }
         }
     }
 
-    pub fn simulate_from<B, C>(
-        &self,
-        solver: &B,
-        state: &Model,
-        width: usize,
-        depth: usize,
-    ) -> Vec<Model>
+    pub fn simulate_from<B, C>(&self, solver: &B, state: &Model, width: usize) -> Vec<Model>
     where
-        C: BasicSolverCanceler,
+        C: BasicCanceler,
         B: BasicSolver<Canceler = C>,
     {
-        assert!(depth >= 1);
-
         let transitions = self.disj_trans();
-        let state_term = state.to_term();
-        let samples = Mutex::new(vec![]);
-        let cancelers = SolverCancelers::new();
+        let cancelers = MultiCanceler::new();
         let empty_assumptions = HashMap::new();
         let next = Next::new(&self.signature);
         let query_conf = QueryConf {
@@ -409,45 +461,41 @@ impl FOModule {
             save_tee: false,
         };
 
-        transitions.into_par_iter().for_each(|transition| {
-            let mut assertions = vec![state_term.clone()];
-            assertions.extend(self.module.axioms.iter().map(|a| next.prime(a)));
-            assertions.extend(transition.into_iter().cloned());
+        let state_term = state.to_term();
+        let samples = Mutex::new(vec![]);
+        thread::scope(|s| {
+            for transition in &transitions {
+                s.spawn(|| {
+                    let mut assertions = vec![state_term.clone()];
+                    assertions.extend(self.module.axioms.iter().map(|a| next.prime(a)));
+                    assertions.extend(transition.iter().copied().cloned());
 
-            'this_loop: loop {
-                let resp = solver.check_sat(&query_conf, &assertions, &empty_assumptions);
-                match resp {
-                    Ok(BasicSolverResp::Sat(mut models)) => {
-                        assert_eq!(models.len(), 2);
-                        let new_sample = models.pop().unwrap();
-                        assertions.push(Term::negate(next.prime(&new_sample.to_term())));
-                        {
-                            let mut samples_lock = samples.lock().unwrap();
-                            if samples_lock.len() < width {
-                                samples_lock.push(new_sample);
+                    'this_loop: loop {
+                        let resp = solver.check_sat(&query_conf, &assertions, &empty_assumptions);
+                        match resp {
+                            Ok(BasicSolverResp::Sat(mut models)) => {
+                                assert_eq!(models.len(), 2);
+                                let new_sample = models.pop().unwrap();
+                                assertions.push(Term::negate(next.prime(&new_sample.to_term())));
+                                {
+                                    let mut samples_lock = samples.lock().unwrap();
+                                    if samples_lock.len() < width {
+                                        samples_lock.push(new_sample);
+                                    }
+                                    if samples_lock.len() >= width {
+                                        cancelers.cancel();
+                                        break 'this_loop;
+                                    }
+                                }
                             }
-                            if samples_lock.len() >= width {
-                                cancelers.cancel();
-                                break 'this_loop;
-                            }
+                            _ => break 'this_loop,
                         }
                     }
-                    _ => break 'this_loop,
-                }
+                });
             }
         });
 
-        let mut samples = samples.into_inner().unwrap();
-
-        if depth > 1 {
-            let mut deep_samples: Vec<Model> = samples
-                .par_iter()
-                .flat_map(|sample| self.simulate_from(solver, sample, width, depth - 1))
-                .collect();
-            samples.append(&mut deep_samples);
-        }
-
-        samples
+        samples.into_inner().unwrap()
     }
 
     pub fn get_pred(&self, conf: &SolverConf, hyp: &[Term], t: &TermOrModel) -> CexOrCore {
@@ -568,10 +616,42 @@ impl FOModule {
         }
     }
 
-    pub fn trans_safe_cex<B: BasicSolver>(&self, solver: &B, hyp: &[Term]) -> CexResult {
+    pub fn safe_implication_cex<H, B, C>(
+        &self,
+        solver: &B,
+        hyp: H,
+        cancelers: Option<MultiCanceler<MultiCanceler<C>>>,
+    ) -> CexResult<H::Key>
+    where
+        H: OrderedTerms,
+        C: BasicCanceler,
+        B: BasicSolver<Canceler = C>,
+    {
         let mut core = HashSet::new();
         for s in self.module.proofs.iter() {
-            match self.trans_cex(solver, hyp, &s.safety.x, true, None, false) {
+            match self.implication_cex(solver, hyp, &s.safety.x, cancelers.clone(), false) {
+                CexResult::UnsatCore(new_core) => core.extend(new_core),
+                res => return res,
+            }
+        }
+
+        CexResult::UnsatCore(core)
+    }
+
+    pub fn trans_safe_cex<H, C, B>(
+        &self,
+        solver: &B,
+        hyp: H,
+        cancelers: Option<MultiCanceler<MultiCanceler<C>>>,
+    ) -> CexResult<H::Key>
+    where
+        H: OrderedTerms,
+        C: BasicCanceler,
+        B: BasicSolver<Canceler = C>,
+    {
+        let mut core = HashSet::new();
+        for s in self.module.proofs.iter() {
+            match self.trans_cex(solver, hyp, &s.safety.x, true, cancelers.clone(), false) {
                 CexResult::UnsatCore(new_core) => core.extend(new_core),
                 res => return res,
             }
@@ -591,65 +671,83 @@ impl FOModule {
     }
 }
 
-pub enum QfBody {
-    CNF,
-    PDnf,
-    PDnfNaive,
+pub enum SmtTactic {
+    Full,
+    Gradual,
+    Minimal,
 }
 
-pub struct InferenceConfig {
-    pub fname: String,
+impl Default for SmtTactic {
+    fn default() -> Self {
+        Self::Gradual
+    }
+}
 
-    pub fallback: bool,
-    pub cfg: QuantifierConfig,
+impl From<&String> for SmtTactic {
+    fn from(value: &String) -> Self {
+        match value.as_str() {
+            "gradual" => Self::Gradual,
+            "minimal" => Self::Minimal,
+            "full" => Self::Full,
+            _ => panic!("invalid choice of SMT technique!"),
+        }
+    }
+}
+
+pub enum QfBody {
+    Cnf,
+    PDnf,
+    Dnf,
+}
+
+impl Default for QfBody {
+    fn default() -> Self {
+        Self::PDnf
+    }
+}
+
+impl From<&String> for QfBody {
+    fn from(value: &String) -> Self {
+        match value.as_str() {
+            "cnf" => QfBody::Cnf,
+            "dnf" => QfBody::Dnf,
+            "pdnf" => QfBody::PDnf,
+            _ => panic!("invalid choice of quantifier-free body!"),
+        }
+    }
+}
+
+pub struct QuantifierFreeConfig {
     pub qf_body: QfBody,
-
-    pub max_size: usize,
-    pub max_existentials: Option<usize>,
-
-    pub clauses: Option<usize>,
     pub clause_size: Option<usize>,
-
     pub cubes: Option<usize>,
-    pub cube_size: Option<usize>,
-    pub non_unit: Option<usize>,
-
     pub nesting: Option<usize>,
-    pub include_eq: bool,
+}
 
-    pub disj: bool,
-    pub gradual_smt: bool,
-    pub minimal_smt: bool,
+#[derive(Clone)]
+pub struct SimulationConfig {
+    pub universe: Vec<usize>,
+    pub sum: Option<usize>,
+    pub depth: Option<usize>,
+    pub guided: bool,
+    pub dfs: bool,
+}
 
-    pub extend_width: Option<usize>,
-    pub extend_depth: Option<usize>,
+pub struct QalphaConfig {
+    pub fname: String,
+    pub fo: FOModule,
+
+    pub quant_cfg: Arc<QuantifierConfig>,
+
+    pub qf_cfg: QuantifierFreeConfig,
+
+    pub sim: SimulationConfig,
+
+    pub strategy: Strategy,
 
     pub until_safe: bool,
-    pub abort_unsafe: bool,
-    pub no_search: bool,
-    pub growth_factor: Option<usize>,
-}
 
-pub fn parse_quantifier(
-    sig: &Signature,
-    s: &str,
-) -> Result<(Option<Quantifier>, Sort, usize), String> {
-    let mut parts = s.split_whitespace();
+    pub seeds: usize,
 
-    let quantifier = match parts.next().unwrap() {
-        "*" => None,
-        "F" => Some(Quantifier::Forall),
-        "E" => Some(Quantifier::Exists),
-        _ => return Err("invalid quantifier (choose F/E/*)".to_string()),
-    };
-
-    let sort_id = parts.next().unwrap().to_string();
-    let sort = if sig.sorts.contains(&sort_id) {
-        Sort::Uninterpreted(sort_id)
-    } else {
-        return Err(format!("invalid sort {sort_id}"));
-    };
-
-    let count = parts.next().unwrap().parse::<usize>().unwrap();
-    Ok((quantifier, sort, count))
+    pub baseline: bool,
 }

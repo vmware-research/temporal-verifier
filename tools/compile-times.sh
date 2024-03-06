@@ -14,12 +14,11 @@
 ##
 ##     ./tools/compile-times.sh fly/src/syntax.rs inference/src/basics.rs
 
-
 set -e
 
 function cargo_under_config() {
   CONFIG="$1"
-  /usr/bin/time -p cargo build $CONFIG 2>&1 | tail -n 3 | head -n 1 | sed 's/^real /    /'
+  /usr/bin/time -p cargo build "$CONFIG" 2>&1 | tail -n 3 | head -n 1 | sed 's/^real /    /'
 }
 
 function build_after_touching() {
@@ -49,12 +48,10 @@ function build_under_config() {
   find . -iname '*.rs' -not -path './target/*' -exec touch {} \+
   cargo_under_config "$CONFIG"
 
-
   build_after_touching "$CONFIG" temporal-verifier/src/command.rs
 
   # loop over remaining arguments, if any
-  until [ -z "$1" ]
-  do
+  until [ -z "$1" ]; do
     FILE="$1"
     shift
 

@@ -51,13 +51,13 @@ pub fn check(
 }
 
 /// Compile-time upper bound on the bounded universe size.
-const STATE_LEN: usize = 128;
+pub const STATE_LEN: usize = 256;
 
 /// A state in the bounded system. Conceptually, this is an interpretation of the signature on the
 /// bounded universe. We represent states concretely as a bitvector, where each bit represents the
 /// presence of a tuple in a relation. The order of the bits is determined by [Indices].
 #[derive(Clone, Copy, Eq, PartialOrd)]
-struct BoundedState(BitArr!(for STATE_LEN));
+pub struct BoundedState(BitArr!(for STATE_LEN));
 
 // Go word by word instead of bit by bit.
 impl std::hash::Hash for BoundedState {
@@ -75,16 +75,40 @@ impl PartialEq for BoundedState {
 }
 
 impl BoundedState {
-    const ZERO: BoundedState = BoundedState(BitArray::ZERO);
+    /// A bounded state with all zeros.
+    pub const ZERO: BoundedState = BoundedState(BitArray::ZERO);
 
     fn get(&self, index: usize) -> bool {
         assert!(index < STATE_LEN, "STATE_LEN is too small");
         self.0[index]
     }
 
-    fn set(&mut self, index: usize, value: bool) {
+    /// Set the bit at the given index of the bounded state to the given value.
+    pub fn set(&mut self, index: usize, value: bool) {
         assert!(index < STATE_LEN, "STATE_LEN is too small");
         self.0.set(index, value);
+    }
+
+    /// Convert this [`BoundedState`] into a flyvy [`Model`].
+    pub fn to_model(&self, indices: &Indices, primes: usize) -> Model {
+        indices.model(primes, |i| self.get(i) as Element)
+    }
+
+    /// Convert this flyvy [`Model`] into a [`BoundedState`].
+    pub fn from_model(indices: &Indices, model: &Model) -> Self {
+        let mut state = Self::ZERO;
+
+        for (i, relation) in indices.signature.relations.iter().enumerate() {
+            let ranges = relation.args.iter().map(|s| (0..model.cardinality(s)));
+            for values in ranges.multi_cartesian_product_fixed() {
+                state.set(
+                    indices.get(&relation.name, 0, &values),
+                    model.interp[i].get(&values) == 1,
+                )
+            }
+        }
+
+        state
     }
 }
 
@@ -107,12 +131,12 @@ impl Debug for BoundedState {
 
 /// A BoundedProgram is a set of initial states, a set of transitions, and a safety property
 #[derive(Clone, Debug, PartialEq)]
-struct BoundedProgram {
+pub struct BoundedProgram {
     /// List of initial states
-    inits: Vec<BoundedState>,
+    pub inits: Vec<BoundedState>,
     /// List of transitions to potentially take at each step. The transition relation is the
     /// disjunction of all these transitions.
-    trs: Vec<Transition>,
+    pub trs: Vec<Transition>,
     /// Safety property to check in each reachable state.
     safe: Formula,
 }
@@ -128,7 +152,7 @@ struct BoundedProgram {
 /// If the guard is true, then the transition is enabled and can step to the updated state.
 /// If the guard is false, then the transition is not enabled.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-struct Transition {
+pub struct Transition {
     guards: Vec<Guard>,
     updates: Vec<Update>,
     slow_guard: Formula,
@@ -161,7 +185,9 @@ impl Transition {
     // This function constructs a Transition that comes from taking all of the
     // input transitions at the same time. If any of the input transitions would
     // not be run for a given state, the new transition will not be run for that state.
-    fn from_conjunction(trs: impl IntoIterator<Item = Transition>) -> Transition {
+    fn from_conjunction(
+        trs: impl IntoIterator<Item = Transition>,
+    ) -> Result<Transition, CheckerError> {
         let mut guards: Vec<_> = vec![];
         let mut updates: Vec<_> = vec![];
         let mut slow_guard = Formula::always_true();
@@ -176,7 +202,10 @@ impl Transition {
         for g in &guards {
             for h in &guards {
                 if g != h && g.index == h.index {
-                    panic!("found two parallel guards that conflict\n{g:?}\n{h:?}")
+                    return Err(CheckerError::ParallelGuards(
+                        format!("{g:?}"),
+                        format!("{h:?}"),
+                    ));
                 }
             }
         }
@@ -190,11 +219,20 @@ impl Transition {
             }
         }
 
-        Transition {
+        Ok(Transition {
             guards,
             updates,
             slow_guard,
-        }
+        })
+    }
+
+    /// Perform this transition's updates on the given [`BoundedState`].
+    pub fn update(&self, state: &BoundedState) -> BoundedState {
+        let mut next = *state;
+        self.updates
+            .iter()
+            .for_each(|update| next.set(update.index, update.formula.evaluate(state)));
+        next
     }
 }
 
@@ -205,18 +243,24 @@ impl Transition {
 /// name and the argument values.
 /// The module is assumed to have already been typechecked.
 /// The translator ignores proof blocks.
-fn translate<'a>(
-    module: &'a Module,
-    universe: &'a UniverseBounds,
+pub fn translate(
+    module: &Module,
+    universe: &UniverseBounds,
     print_timing: bool,
-) -> Result<(BoundedProgram, Indices<'a>), CheckerError> {
+) -> Result<(BoundedProgram, Indices), CheckerError> {
     for relation in &module.signature.relations {
         if relation.sort != Sort::Bool {
             panic!("non-bool relations in checker (use Module::convert_non_bool_relations)")
         }
     }
 
-    let indices = Indices::new(&module.signature, universe, 1);
+    let indices = Indices::new(module.signature.clone(), universe, 1);
+    if indices
+        .iter()
+        .any(|(_, rest)| rest.values().any(|(i, _)| i >= &STATE_LEN))
+    {
+        return Err(CheckerError::StateLenTooSmall);
+    }
 
     for sort in &module.signature.sorts {
         if !universe.contains_key(sort) {
@@ -228,7 +272,7 @@ fn translate<'a>(
         panic!("definitions in checker (use Module::inline_defs)")
     }
 
-    println!("starting translation...");
+    log::debug!("starting translation...");
     let timer = std::time::Instant::now();
 
     let d = extract(module).map_err(CheckerError::ExtractionError)?;
@@ -245,7 +289,7 @@ fn translate<'a>(
         enumerate_quantifiers(&inits, &module.signature, universe)
             .map_err(CheckerError::EnumerationError)?,
     );
-    println!("enumerating {} initial states", inits.exact_cardinality());
+    log::debug!("enumerating {} initial states", inits.exact_cardinality());
     let inits: Vec<BoundedState> = inits
         .sat_valuations()
         .map(|valuation| {
@@ -293,7 +337,7 @@ fn translate<'a>(
             (tr, unconstrained)
         })
         .collect();
-    println!(
+    log::debug!(
         "enumerating {} transitions",
         trs.iter()
             .map(|(_, unconstrained)| 2_usize.pow(unconstrained.len() as u32))
@@ -613,7 +657,7 @@ fn enumerated_to_transition(
 
     let transition = match term {
         Enumerated::And(xs) => {
-            Transition::from_conjunction(xs.into_iter().map(go).collect::<Result<Vec<_>, _>>()?)
+            Transition::from_conjunction(xs.into_iter().map(go).collect::<Result<Vec<_>, _>>()?)?
         }
         Enumerated::Not(ref x) => {
             let mut tr = go(*x.clone())?;
@@ -874,14 +918,14 @@ fn interpret(
 /// efficiently retrieving the set of enabled transitions in a given state without searching through
 /// all transitions.
 #[derive(Clone, Debug)]
-struct Transitions<'a> {
+pub struct Transitions<'a> {
     data: Vec<&'a Transition>,
     children: HashMap<&'a Guard, Transitions<'a>>,
 }
 
 impl<'a> Transitions<'a> {
     /// Construct an empty set of transitions
-    fn new() -> Transitions<'a> {
+    pub fn new() -> Transitions<'a> {
         Transitions {
             data: Vec::new(),
             children: HashMap::default(),
@@ -889,7 +933,7 @@ impl<'a> Transitions<'a> {
     }
 
     /// Insert the given transition into the set
-    fn insert(&mut self, value: &'a Transition) {
+    pub fn insert(&mut self, value: &'a Transition) {
         self.insert_from_iter(value.guards.iter(), value)
     }
 
@@ -912,7 +956,7 @@ impl<'a> Transitions<'a> {
     }
 
     /// Get all the transitions whose guards are a subset of the given set.
-    fn get_subsets(&self, set: &BoundedState) -> Vec<&'a Transition> {
+    pub fn get_subsets(&self, set: &BoundedState) -> Vec<&'a Transition> {
         let mut out = vec![];
         self.get_subsets_into_vec(set, &mut out);
         out
@@ -931,13 +975,14 @@ impl<'a> Transitions<'a> {
 }
 
 /// Can answer the question "have I seen a state that is isomorphic to this one before"?
-struct IsoStateSet {
+pub struct IsoStateSet {
     set: HashSet<BoundedState>,
     orderings: Vec<Vec<(usize, usize)>>,
 }
 
 impl IsoStateSet {
-    fn new(indices: &Indices) -> IsoStateSet {
+    /// Create a new empty state set.
+    pub fn new(indices: &Indices) -> IsoStateSet {
         let sorts: Vec<_> = indices.universe.keys().sorted().collect();
         let orderings = sorts
             .iter()
@@ -983,7 +1028,8 @@ impl IsoStateSet {
         }
     }
 
-    fn insert(&mut self, x: &BoundedState) -> bool {
+    /// Insert a state into this set.
+    pub fn insert(&mut self, x: &BoundedState) -> bool {
         if self.set.contains(x) {
             false
         } else {
@@ -1001,6 +1047,8 @@ impl IsoStateSet {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use fly::sorts::sort_check_module;
 
@@ -1077,7 +1125,7 @@ mod tests {
 
     #[test]
     fn checker_set_basic() {
-        let signature = Signature {
+        let signature = Arc::new(Signature {
             sorts: vec![],
             relations: vec![RelationDecl {
                 args: vec![],
@@ -1085,9 +1133,9 @@ mod tests {
                 name: "r".to_string(),
                 mutable: true,
             }],
-        };
+        });
         let universe = std::collections::HashMap::new();
-        let indices = Indices::new(&signature, &universe, 1);
+        let indices = Indices::new(signature, &universe, 1);
 
         let program = BoundedProgram {
             inits: vec![state([0])],
@@ -1116,7 +1164,7 @@ mod tests {
 
     #[test]
     fn checker_set_cycle() {
-        let signature = Signature {
+        let signature = Arc::new(Signature {
             sorts: vec![],
             relations: vec![
                 RelationDecl {
@@ -1144,9 +1192,9 @@ mod tests {
                     mutable: true,
                 },
             ],
-        };
+        });
         let universe = std::collections::HashMap::new();
-        let indices = Indices::new(&signature, &universe, 1);
+        let indices = Indices::new(signature, &universe, 1);
 
         let program = BoundedProgram {
             inits: vec![state([1, 0, 0, 0])],
@@ -1248,7 +1296,7 @@ mod tests {
         let mut m = fly::parser::parse(source).unwrap();
         sort_check_module(&mut m).unwrap();
         let universe = std::collections::HashMap::from([("node".to_string(), 2)]);
-        let indices = Indices::new(&m.signature, &universe, 1);
+        let indices = Indices::new(m.signature.clone(), &universe, 1);
 
         let trs = vec![
             transition(
@@ -1438,7 +1486,7 @@ immutable f(s): bool
         ";
         let m = fly::parser::parse(source).unwrap();
         let universe = std::collections::HashMap::from([("s".to_string(), 2)]);
-        let indices = Indices::new(&m.signature, &universe, 1);
+        let indices = Indices::new(m.signature, &universe, 1);
         let mut set = IsoStateSet::new(&indices);
 
         assert!(set.insert(&state([0, 0])));
@@ -1455,7 +1503,7 @@ immutable f(a, b): bool
         let m = fly::parser::parse(source).unwrap();
         let universe =
             std::collections::HashMap::from([("a".to_string(), 3), ("b".to_string(), 3)]);
-        let indices = Indices::new(&m.signature, &universe, 1);
+        let indices = Indices::new(m.signature, &universe, 1);
         let mut set = IsoStateSet::new(&indices);
 
         // b: 0 -> 2, 2 -> 1, 1 -> 0
@@ -1470,7 +1518,7 @@ immutable f(s, t, s): bool
         let m = fly::parser::parse(source).unwrap();
         let universe =
             std::collections::HashMap::from([("s".to_string(), 3), ("t".to_string(), 2)]);
-        let indices = Indices::new(&m.signature, &universe, 1);
+        let indices = Indices::new(m.signature, &universe, 1);
         let mut set = IsoStateSet::new(&indices);
         let state = |vec: Vec<(usize, usize, usize)>| -> BoundedState {
             let mut out = BoundedState::ZERO;
@@ -1505,7 +1553,7 @@ immutable f(s, bool, s): bool
         ";
         let m = fly::parser::parse(source).unwrap();
         let universe = std::collections::HashMap::from([("s".to_string(), 3)]);
-        let indices = Indices::new(&m.signature, &universe, 1);
+        let indices = Indices::new(m.signature, &universe, 1);
         let mut set = IsoStateSet::new(&indices);
         let state = |vec: Vec<(usize, usize, usize)>| -> BoundedState {
             let mut out = BoundedState::ZERO;

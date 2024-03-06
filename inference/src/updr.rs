@@ -8,7 +8,7 @@ use itertools::Itertools;
 use solver::basics::SingleSolver;
 use std::sync::Arc;
 
-use crate::basics::{CexOrCore, CexResult, FOModule, TermOrModel};
+use crate::basics::{CexOrCore, CexResult, FOModule, SmtTactic, TermOrModel};
 use fly::syntax::Term::{NAryOp, Quantified, UnaryOp};
 use fly::syntax::*;
 use fly::term::cnf::term_to_cnf_clauses;
@@ -333,7 +333,7 @@ impl Updr {
     }
 
     fn find_frame(&mut self, m: &Module) -> Option<Frame> {
-        let module = FOModule::new(m, false, false, false);
+        let module = FOModule::new(m, false, SmtTactic::Full);
         self.backwards_reachable_states = Vec::new();
         for proof in &module.module.proofs {
             for clause in term_to_cnf_clauses(&proof.safety.x) {
